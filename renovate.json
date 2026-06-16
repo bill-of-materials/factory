@@ -1,0 +1,19 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":label(dependencies)",
+    ":semanticCommitType(bump)"
+  ],
+  "docker": {
+    "pinDigests": true
+  },
+  "packageRules": [
+    {
+      "matchDatasources": [
+        "docker"
+      ],
+      "groupName": "container base images"
+    }
+  ]
+}

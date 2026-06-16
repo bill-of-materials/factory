@@ -1,0 +1,41 @@
+schemaVersion: "2.0.0"
+
+metadataTest:
+  user: "app"
+
+fileExistenceTests:
+  - name: ca-certificates
+    path: /etc/ssl/certs/ca-certificates.crt
+    shouldExist: true
+
+  - name: curl
+    path: /usr/bin/curl
+    shouldExist: true
+
+  - name: dumb-init
+    path: /usr/bin/dumb-init
+    shouldExist: true
+
+  - name: os-release
+    path: /etc/os-release
+    shouldExist: true
+
+commandTests:
+  - name: debian-release
+    command: cat
+    args:
+      - /etc/os-release
+    expectedOutput:
+      - "ID=debian"
+
+  - name: curl-version
+    command: curl
+    args:
+      - --version
+    exitCode: 0
+
+  - name: dumb-init-version
+    command: dumb-init
+    args:
+      - --version
+    exitCode: 0

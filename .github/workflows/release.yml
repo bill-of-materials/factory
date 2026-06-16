@@ -1,0 +1,139 @@
+name: release
+
+on:
+  workflow_run:
+    workflows:
+      - validate
+    types:
+      - completed
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+jobs:
+  verify-trigger:
+    runs-on: ubuntu-latest
+    outputs:
+      proceed: ${{ steps.check.outputs.proceed }}
+    steps:
+      - id: check
+        shell: bash
+        run: |
+          if [[ "${{ github.event.workflow_run.conclusion }}" != "success" ]]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ "${{ github.event.workflow_run.head_branch }}" != "main" ]]; then
+            echo "proceed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "proceed=true" >> "$GITHUB_OUTPUT"
+
+  discover:
+    needs:
+      - verify-trigger
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.discover.outputs.images }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: images
+        run: |
+          IMAGES=$(
+            find . \
+              -mindepth 1 \
+              -maxdepth 1 \
+              -type d \
+              ! -name ".git" \
+              ! -name ".github" \
+            | while read d; do
+                test -f "$d/Dockerfile" && echo "$d"
+              done \
+            | jq -R -s -c 'split("\n")[:-1]'
+          )
+          echo "images=$IMAGES" >> $GITHUB_OUTPUT
+
+  build-and-publish:
+    needs:
+      - verify-trigger
+      - discover
+    if: needs.verify-trigger.outputs.proceed == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.discover.outputs.images) }}
+
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v4.1.0
+      - name: Check Cosign install
+        run: cosign version
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Login to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute metadata
+        id: meta
+        shell: bash
+        run: |
+          IMAGE_NAME=$(basename "${{ matrix.image }}")
+          echo "image_name=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
+          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+          echo "source=${{ github.server_url }}/${{ github.repository }}" >> "$GITHUB_OUTPUT"
+          echo "revision=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and Push
+        id: build
+        uses: docker/build-push-action@v7
+        with:
+          context: ${{ matrix.image }}
+          push: true
+          platforms: linux/amd64,linux/arm64
+          provenance: mode=max
+          sbom: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ steps.meta.outputs.image_name }}:${{ github.event.workflow_run.head_sha }}
+            ghcr.io/${{ github.repository_owner }}/${{ steps.meta.outputs.image_name }}:latest
+          labels: |
+            org.opencontainers.image.source=${{ steps.meta.outputs.source }}
+            org.opencontainers.image.revision=${{ steps.meta.outputs.revision }}
+            org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+          build-args: |
+            IMAGE_SOURCE=${{ steps.meta.outputs.source }}
+            IMAGE_REVISION=${{ steps.meta.outputs.revision }}
+            IMAGE_CREATED=${{ steps.meta.outputs.created }}
+
+      - name: Sign image
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+        shell: bash
+        run: |
+          cosign sign --yes \
+            ghcr.io/${{ github.repository_owner }}/${{ steps.meta.outputs.image_name }}@${DIGEST}

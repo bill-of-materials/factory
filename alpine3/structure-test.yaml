@@ -1,0 +1,41 @@
+schemaVersion: "2.0.0"
+
+metadataTest:
+  user: "app"
+
+fileExistenceTests:
+  - name: apk
+    path: /sbin/apk
+    shouldExist: true
+
+  - name: busybox
+    path: /bin/busybox
+    shouldExist: true
+
+  - name: curl
+    path: /usr/bin/curl
+    shouldExist: true
+
+  - name: dumb-init
+    path: /usr/bin/dumb-init
+    shouldExist: true
+
+commandTests:
+  - name: alpine-release
+    command: cat
+    args:
+      - /etc/os-release
+    expectedOutput:
+      - "ID=alpine"
+
+  - name: apk-version
+    command: apk
+    args:
+      - --version
+    exitCode: 0
+
+  - name: curl-version
+    command: curl
+    args:
+      - --version
+    exitCode: 0

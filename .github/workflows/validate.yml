@@ -1,0 +1,58 @@
+name: validate
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      images: ${{ steps.images.outputs.images }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: images
+        run: |
+          IMAGES=$(find . -mindepth 1 -maxdepth 1 -type d \
+            ! -name ".git" \
+            ! -name ".github" \
+            | jq -R -s -c 'split("\n")[:-1]')
+          echo "images=$IMAGES" >> $GITHUB_OUTPUT
+
+  structure-test:
+    needs: discover
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ${{ fromJson(needs.discover.outputs.images) }}
+
+    steps:
+      - uses: actions/checkout@v6
+      - name: Build image
+        run: |
+          IMAGE_NAME=$(basename "${{ matrix.image }}")
+          docker build \
+            -t local/${IMAGE_NAME}:test \
+            ${{ matrix.image }}
+
+      - name: Install Container Structure Test
+        run: |
+          VERSION=1.22.1
+          curl -fsSL \
+            -o container-structure-test \
+            https://github.com/GoogleContainerTools/container-structure-test/releases/download/v${VERSION}/container-structure-test-linux-amd64
+          chmod +x container-structure-test
+          sudo mv container-structure-test /usr/local/bin/
+
+      - name: Run Container Structure Test
+        run: |
+          IMAGE_NAME=$(basename "${{ matrix.image }}")
+          container-structure-test test \
+            --image local/${IMAGE_NAME}:test \
+            --config ${{ matrix.image }}/structure-test.yaml
