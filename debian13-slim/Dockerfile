@@ -28,13 +28,14 @@ RUN set -euxo pipefail \
   && apt-get clean \
   && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*
 
-# create a non-login, non-root runtime user explicitly (more predictable than "nobody")
-RUN useradd \
+RUN set -euxo pipefail \
+  && groupadd --gid 10001 app \
+  && useradd \
     --system \
     --uid 10001 \
-    --gid 10001 \
-    --no-create-home \
-    --home-dir /nonexistent \
+    --gid app \
+    --create-home \
+    --home-dir /app \
     --shell /usr/sbin/nologin \
     app
 

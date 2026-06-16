@@ -40,30 +40,60 @@ jobs:
       - verify-trigger
     runs-on: ubuntu-latest
     outputs:
-      images: ${{ steps.discover.outputs.images }}
+      images: ${{ steps.images.outputs.images }}
+      has_images: ${{ steps.images.outputs.has_images }}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - id: images
+        shell: bash
         run: |
-          IMAGES=$(
-            find . \
-              -mindepth 1 \
-              -maxdepth 1 \
-              -type d \
-              ! -name ".git" \
-              ! -name ".github" \
-            | while read d; do
+          # generate the image list
+          # only rebuild and test modified oci-images
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            BASE_SHA="${{ github.event.pull_request.base.sha }}"
+            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE_SHA="${{ github.event.before }}"
+            HEAD_SHA="${{ github.sha }}"
+          fi
+          if [[ -n "$BASE_SHA" ]]; then
+            CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
+          else
+            CHANGED=$(git diff-tree --no-commit-id --name-only -r "$HEAD_SHA")
+          fi
+          DIRS=$(
+            printf '%s\n' "${CHANGED:-}" \
+            | awk -F/ 'NF > 1 {print $1}' \
+            | sort -u \
+            | while read -r d; do
                 test -f "$d/Dockerfile" && echo "$d"
-              done \
-            | jq -R -s -c 'split("\n")[:-1]'
+              done || true
           )
-          echo "images=$IMAGES" >> $GITHUB_OUTPUT
+          IMAGES=$(
+            printf '%s\n' "${DIRS:-}" \
+            | jq -R -s -c '
+                split("\n")
+                | map(select(length > 0))
+              '
+          )
+          if [[ "$IMAGES" == "[]" ]]; then
+            echo 'images=["__none__"]' >> "$GITHUB_OUTPUT"
+            echo 'has_images=false' >> "$GITHUB_OUTPUT"
+          else
+            echo "images=$IMAGES" >> "$GITHUB_OUTPUT"
+            echo 'has_images=true' >> "$GITHUB_OUTPUT"
+          fi
+          echo "Images: $IMAGES"
 
   build-and-publish:
     needs:
       - verify-trigger
       - discover
-    if: needs.verify-trigger.outputs.proceed == 'true'
+    if: |
+      needs.verify-trigger.outputs.proceed == 'true' &&
+      needs.discover.outputs.has_images == 'true'
     strategy:
       fail-fast: false
       matrix:

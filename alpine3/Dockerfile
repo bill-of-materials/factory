@@ -16,13 +16,33 @@ ENV LC_ALL="C.UTF-8"
 
 SHELL ["/bin/ash", "-eo", "pipefail", "-c"]
 
-RUN set -x \
-  && apk add --no-cache \
-    ca-certificates \
-    curl \
-    dumb-init \
-  && update-ca-certificates
+RUN set -eux \
+    && apk add --no-cache \
+        ca-certificates \
+        curl \
+        dumb-init \
+        tzdata \
+    && update-ca-certificates
 
-USER nobody
+# Dedicated runtime user/group
+RUN addgroup -g 10001 -S app \
+    && adduser \
+        -S \
+        -D \
+        -H \
+        -u 10001 \
+        -G app \
+        -s /sbin/nologin \
+        app
+
+# Runtime directories
+RUN mkdir -p /app /tmp \
+    && chmod 1777 /tmp \
+    && chown -R app:app /app
+
+WORKDIR /app
+
+USER app
 
 ENTRYPOINT ["/usr/bin/dumb-init", "--"]
+CMD ["/bin/sh"]
