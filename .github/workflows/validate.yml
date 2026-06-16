@@ -18,10 +18,18 @@ jobs:
       - uses: actions/checkout@v6
       - id: images
         run: |
-          IMAGES=$(find . -mindepth 1 -maxdepth 1 -type d \
-            ! -name ".git" \
-            ! -name ".github" \
-            | jq -R -s -c 'split("\n")[:-1]')
+          IMAGES=$(
+            find . \
+              -mindepth 1 \
+              -maxdepth 1 \
+              -type d \
+              ! -name ".git" \
+              ! -name ".github" \
+            | while read d; do
+                test -f "$d/Dockerfile" && echo "$d"
+              done \
+            | jq -R -s -c 'split("\n")[:-1]'
+          )
           echo "images=$IMAGES" >> $GITHUB_OUTPUT
 
   structure-test:
