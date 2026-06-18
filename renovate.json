@@ -5,14 +5,15 @@
     ":label(dependencies)",
     ":semanticCommitType(bump)"
   ],
-  "docker": {
-    "pinDigests": true
-  },
   "packageRules": [
     {
-      "matchDatasources": [
+      "matchCategories": [
         "docker"
       ],
+      "pinDigests": true
+    },
+    {
+      "matchDatasources": ["docker"],
       "groupName": "container base images"
     }
   ]
