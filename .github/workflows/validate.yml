@@ -21,7 +21,7 @@ jobs:
       has_images: ${{ steps.images.outputs.has_images }}
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: images
@@ -78,7 +78,7 @@ jobs:
         if: matrix.image == '__none__'
         run: echo "Nothing to validate"
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         if: matrix.image != '__none__'
 
       - name: Build image
