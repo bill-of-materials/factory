@@ -2,10 +2,6 @@ name: validate
 
 on:
   pull_request:
-    paths:
-      - "**/Dockerfile"
-      - "**/structure-test.yaml"
-      - ".github/workflows/validate.yml"
   push:
     branches:
       - main
@@ -108,3 +104,29 @@ jobs:
           container-structure-test test \
             --image local/${IMAGE_NAME}:test \
             --config ${{ matrix.image }}/structure-test.yaml
+
+  validation-required:
+    needs:
+      - discover
+      - structure-test
+    runs-on: ubuntu-latest
+    if: ${{ always() }}
+
+    steps:
+      - name: Check validation results
+        shell: bash
+        run: |
+          echo "discover:       ${{ needs.discover.result }}"
+          echo "structure-test: ${{ needs.structure-test.result }}"
+
+          if [[ "${{ needs.discover.result }}" != "success" ]]; then
+            echo "ERROR: discover did not succeed"
+            exit 1
+          fi
+
+          if [[ "${{ needs.structure-test.result }}" != "success" ]]; then
+            echo "ERROR: structure-test did not succeed"
+            exit 1
+          fi
+
+          echo "All validation checks passed."
