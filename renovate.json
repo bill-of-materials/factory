@@ -1,20 +1,26 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
   "extends": [
-    "config:recommended",
+    "config:best-practices",
     ":label(dependencies)",
     ":semanticCommitType(bump)"
   ],
   "packageRules": [
     {
-      "matchCategories": [
-        "docker"
-      ],
+      "description": "Group all docker image updates",
+      "groupName": "container base images",
+      "matchDatasources": ["docker"]
+    },
+    {
+      "description": "Pin docker image digests",
+      "matchCategories": ["docker"],
       "pinDigests": true
     },
     {
-      "matchDatasources": ["docker"],
-      "groupName": "container base images"
+      "description": "Group all GitHub Actions workflow dependencies",
+      "groupName": "GitHub Actions dependencies",
+      "matchManagers": ["github-actions"],
+      "pinDigests": true
     }
   ]
 }
