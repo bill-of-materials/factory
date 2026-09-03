@@ -1,4 +1,4 @@
-FROM docker.io/library/debian:trixie-slim@sha256:4e401d95de7083948053197a9c3913343cd06b706bf15eb6a0c3ccd26f436a0e
+FROM docker.io/library/debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 
 LABEL org.opencontainers.image.title="debian13-slim"
 LABEL org.opencontainers.image.base.name="debian:trixie-slim"
