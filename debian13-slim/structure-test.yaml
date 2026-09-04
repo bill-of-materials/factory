@@ -1,7 +1,7 @@
-schemaVersion: "2.0.0"
+schemaVersion: '2.0.0'
 
 metadataTest:
-  user: "app"
+  user: 'app'
 
 fileExistenceTests:
   - name: ca-certificates
@@ -26,7 +26,7 @@ commandTests:
     args:
       - /etc/os-release
     expectedOutput:
-      - "ID=debian"
+      - 'ID=debian'
 
   - name: curl-version
     command: curl

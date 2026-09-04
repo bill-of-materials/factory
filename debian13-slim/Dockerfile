@@ -1,7 +1,7 @@
 FROM docker.io/library/debian:trixie-slim@sha256:d7e12182ce18b85b93007c1dedf31f2d29e01ccf3182cc4017c709b6259bc132
 
-LABEL org.opencontainers.image.title="debian13-slim"
-LABEL org.opencontainers.image.base.name="debian:trixie-slim"
+LABEL org.opencontainers.image.title="ghcr.io/bill-of-materials/debian13-slim"
+LABEL org.opencontainers.image.base.name="ghcr.io/bill-of-materials/debian:trixie-slim"
 
 ARG IMAGE_SOURCE
 ARG IMAGE_REVISION
