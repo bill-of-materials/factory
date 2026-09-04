@@ -1,0 +1,24 @@
+schemaVersion: '2.0.0'
+
+metadataTest:
+  user: 'app'
+
+fileExistenceTests:
+  - name: dumb-init
+    path: /usr/bin/dumb-init
+    shouldExist: true
+
+  - name: snapserver
+    path: /usr/bin/snapserver
+    shouldExist: true
+
+  - name: /run/snapcast
+    path: /run/snapcast
+    shouldExist: true
+
+commandTests:
+  - name: snapserver-version
+    command: snapserver
+    args:
+      - --version
+    exitCode: 0
