@@ -1,0 +1,56 @@
+schemaVersion: '2.0.0'
+
+metadataTest:
+  user: 'app'
+
+fileExistenceTests:
+  - name: dumb-init
+    path: /usr/bin/dumb-init
+    shouldExist: true
+
+  - name: ninjamsrv
+    path: /usr/bin/ninjamsrv
+    shouldExist: true
+
+commandTests:
+  - name: ninjamsrv works
+    command: sh
+    args:
+      - -c
+      - |
+        rm -f /app/ninjamsrv.log
+        ninjamsrv /app/config/ninjam_server.cfg >/app/ninjamsrv.log 2>&1 &
+        pid=$!
+        trap 'kill "$pid" 2>/dev/null || true' EXIT
+
+        # Give ninjamsrv a few seconds to start.
+        for i in 1 2 3 4 5; do
+          if grep -q "starting up..." /app/ninjamsrv.log 2>/dev/null; then
+            break
+          fi
+          sleep 1
+        done
+
+        # Process must still be running.
+        if ! kill -0 "$pid" 2>/dev/null; then
+          echo "ninjamsrv exited unexpectedly:"
+          cat /app/ninjamsrv.log
+          exit 1
+        fi
+
+        # Startup must not contain a config error.
+        if grep -q '\[config\] error' /app/ninjamsrv.log; then
+          echo "ninjamsrv reported a config error:"
+          cat /app/ninjamsrv.log
+          exit 1
+        fi
+
+        # Server must be listening.
+        if ! nc -z 127.0.0.1 2049 2>/dev/null; then
+          echo "ninjamsrv is not listening on port 2049:"
+          cat /app/ninjamsrv.log
+          exit 1
+        fi
+
+        echo "ninjamsrv started successfully:"
+        cat /app/ninjamsrv.log
