@@ -1,4 +1,4 @@
-FROM docker.io/library/debian:trixie-slim@sha256:e27e3dbef3b2064bed82f2fef343c0d02a4b8d5675e5b2c511883442e001630d
+FROM docker.io/library/debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
 
 LABEL org.opencontainers.image.title="ghcr.io/bill-of-materials/debian13-slim"
 LABEL org.opencontainers.image.base.name="ghcr.io/bill-of-materials/debian:trixie-slim"
