@@ -1,4 +1,4 @@
-FROM ghcr.io/bill-of-materials/alpine3:latest@sha256:f9fa5247b549a8c3fd30ff6af09e3e3a9b0eed76123f686535048f247a6f54c9
+FROM ghcr.io/bill-of-materials/alpine3:latest@sha256:9eee99e4d67d44850ef7bb0681ad8cb746f565d9cd47bce8da5ddcf986a163f2
 
 LABEL org.opencontainers.image.title="ghcr.io/bill-of-materials/snapcast-server"
 LABEL org.opencontainers.image.base.name="ghcr.io/bill-of-materials/alpine3"
