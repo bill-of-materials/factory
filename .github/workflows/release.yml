@@ -71,15 +71,27 @@ jobs:
                 test -f "$d/Dockerfile" && echo "$d"
               done || true
           )
-          IMAGES=$(
-            printf '%s\n' "${DIRS:-}" \
-            | jq -R -s -c '
-                split("\n")
-                | map(select(length > 0))
-              '
-          )
+
+          # Each image dir may declare its target architectures in a
+          # "platforms.txt" file (comma-separated, e.g. "linux/amd64,linux/arm64").
+          # Images without one fall back to DEFAULT_PLATFORMS.
+          DEFAULT_PLATFORMS="linux/amd64,linux/arm64,linux/arm/v7"
+
+          IMAGES="[]"
+          while read -r d; do
+            [[ -z "$d" ]] && continue
+            PLATFORMS_FILE="$d/platforms.txt"
+            if [[ -f "$PLATFORMS_FILE" ]]; then
+              PLATFORMS=$(tr -d '[:space:]' < "$PLATFORMS_FILE")
+            else
+              PLATFORMS="$DEFAULT_PLATFORMS"
+            fi
+            ENTRY=$(jq -c -n --arg img "$d" --arg platforms "$PLATFORMS" '{image: $img, platforms: $platforms}')
+            IMAGES=$(jq -c -n --argjson a "$IMAGES" --argjson b "$ENTRY" '$a + [$b]')
+          done <<< "$DIRS"
+
           if [[ "$IMAGES" == "[]" ]]; then
-            echo 'images=["__none__"]' >> "$GITHUB_OUTPUT"
+            echo 'images=[{"image":"__none__","platforms":"__none__"}]' >> "$GITHUB_OUTPUT"
             echo 'has_images=false' >> "$GITHUB_OUTPUT"
           else
             echo "images=$IMAGES" >> "$GITHUB_OUTPUT"
@@ -97,7 +109,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: ${{ fromJson(needs.discover.outputs.images) }}
+        include: ${{ fromJson(needs.discover.outputs.images) }}
 
     permissions:
       contents: read
@@ -145,7 +157,7 @@ jobs:
         with:
           context: ${{ matrix.image }}
           push: true
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ matrix.platforms }}
           provenance: mode=max
           sbom: true
           tags: |

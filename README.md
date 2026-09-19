@@ -14,6 +14,20 @@ docker buildx build \
   .
 ```
 
+## Configuring target architectures
+
+By default every image is built and validated for `linux/amd64`, `linux/arm64`
+and `linux/arm/v7`. To override this for a given image, add a `platforms.txt`
+file next to its `Dockerfile` containing a comma-separated list of platforms:
+
+```txt
+linux/amd64,linux/arm64
+```
+
+The `validate` workflow builds and runs the structure tests against every
+listed platform (via QEMU emulation), and the `release` workflow publishes a
+single multi-arch manifest for the same list.
+
 ## Supply-chain architecture
 
 ```mermaid
