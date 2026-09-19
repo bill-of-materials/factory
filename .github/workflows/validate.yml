@@ -13,7 +13,7 @@ jobs:
   discover:
     runs-on: ubuntu-latest
     outputs:
-      images: ${{ steps.images.outputs.images }}
+      matrix: ${{ steps.images.outputs.matrix }}
       has_images: ${{ steps.images.outputs.has_images }}
 
     steps:
@@ -45,21 +45,39 @@ jobs:
                 test -f "$d/Dockerfile" && echo "$d"
               done || true
           )
-          IMAGES=$(
-            printf '%s\n' "${DIRS:-}" \
-            | jq -R -s -c '
-                split("\n")
-                | map(select(length > 0))
-              '
-          )
-          if [[ "$IMAGES" == "[]" ]]; then
-            echo 'images=["__none__"]' >> "$GITHUB_OUTPUT"
+
+          # Each image dir may declare its target architectures in a
+          # "platforms.txt" file (comma-separated, e.g. "linux/amd64,linux/arm64").
+          # Images without one fall back to DEFAULT_PLATFORMS. Every declared
+          # platform gets its own matrix entry so each arch is actually built
+          # and validated, instead of only the runner's native arch.
+          DEFAULT_PLATFORMS="linux/amd64,linux/arm64,linux/arm/v7"
+
+          MATRIX="[]"
+          while read -r d; do
+            [[ -z "$d" ]] && continue
+            PLATFORMS_FILE="$d/platforms.txt"
+            if [[ -f "$PLATFORMS_FILE" ]]; then
+              PLATFORMS=$(tr -d '[:space:]' < "$PLATFORMS_FILE")
+            else
+              PLATFORMS="$DEFAULT_PLATFORMS"
+            fi
+            ENTRIES=$(
+              printf '%s' "$PLATFORMS" \
+              | jq -R -c --arg img "$d" \
+                  'split(",") | map(select(length > 0)) | map({image: $img, platform: .})'
+            )
+            MATRIX=$(jq -c -n --argjson a "$MATRIX" --argjson b "$ENTRIES" '$a + $b')
+          done <<< "$DIRS"
+
+          if [[ "$MATRIX" == "[]" ]]; then
+            echo 'matrix=[{"image":"__none__","platform":"__none__"}]' >> "$GITHUB_OUTPUT"
             echo 'has_images=false' >> "$GITHUB_OUTPUT"
           else
-            echo "images=$IMAGES" >> "$GITHUB_OUTPUT"
+            echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
             echo 'has_images=true' >> "$GITHUB_OUTPUT"
           fi
-          echo "Images: $IMAGES"
+          echo "Matrix: $MATRIX"
 
   structure-test:
     needs: discover
@@ -67,25 +85,34 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        image: ${{ fromJson(needs.discover.outputs.images) }}
+        include: ${{ fromJson(needs.discover.outputs.matrix) }}
 
     steps:
       - name: No OCI images changed
         if: matrix.image == '__none__'
         run: echo "Nothing to validate"
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # 7
         if: matrix.image != '__none__'
 
-      - name: Build image
+      - name: Set up QEMU
+        if: matrix.image != '__none__'
+        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
+
+      - name: Set up Buildx
+        if: matrix.image != '__none__'
+        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4
+
+      - name: Build image (${{ matrix.platform }})
         if: matrix.image != '__none__'
         run: |
           test -n "${{ matrix.image }}"
-          echo '${{ needs.discover.outputs.images }}'
           IMAGE_NAME=$(basename "${{ matrix.image }}")
-          docker build \
+          docker buildx build \
+            --platform "${{ matrix.platform }}" \
+            --load \
             -t local/${IMAGE_NAME}:test \
-            ${{ matrix.image }}
+            "${{ matrix.image }}"
 
       - name: Install Container Structure Test
         if: matrix.image != '__none__'
@@ -97,7 +124,7 @@ jobs:
           chmod +x container-structure-test
           sudo mv container-structure-test /usr/local/bin/
 
-      - name: Run Container Structure Test
+      - name: Run Container Structure Test (${{ matrix.platform }})
         if: matrix.image != '__none__'
         run: |
           IMAGE_NAME=$(basename "${{ matrix.image }}")
