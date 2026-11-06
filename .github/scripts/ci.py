@@ -22,25 +22,38 @@ RELEASE_NONE_ENTRY = {**NONE_ENTRY, "version": "__none__"}
 
 
 def release_plan(root: Path, head_sha: str,
-                 revision_lookup: Callable[[str], str | None]) -> list[dict]:
-    """Plan releases for images with changes; resume what is already published from head_sha."""
-    plans = []
+                 revision_lookup: Callable[[str], str | None]) -> tuple[list[dict], list[dict]]:
+    """Plan releases for images with changes.
+
+    A version already published from head_sha or one of its ancestors is resumed from that
+    revision. Any other published revision is an error for that image only.
+    Returns (plans, errors).
+    """
+    plans, errors = [], []
     for image in images.list_images(root):
         plan = versioning.next_version(root, image, head_sha)
         if plan is None:
             continue
         published = revision_lookup(f"{registry.REGISTRY}/{image}:{plan.version}")
         if published is None:
-            mode = "build"
-        elif published == head_sha:
-            mode = "resume"
+            mode, sha = "build", head_sha
+        elif published == head_sha or (
+                published != registry.UNKNOWN_REVISION
+                and versioning.is_ancestor(root, published, head_sha)):
+            mode, sha = "resume", published
         else:
-            raise RuntimeError(f"{image}:{plan.version} already published from {published}")
+            errors.append({
+                "image": image, "version": plan.version,
+                "error": f"{image}:{plan.version} already published from {published}, "
+                         f"which is not an ancestor of {head_sha}",
+            })
+            continue
         plans.append({
             "image": image, "version": plan.version,
-            "previous_version": plan.previous_version, "bump": plan.bump, "mode": mode,
+            "previous_version": plan.previous_version, "bump": plan.bump,
+            "mode": mode, "sha": sha,
         })
-    return plans
+    return plans, errors
 
 
 def cmd_pr_matrix(args) -> int:
@@ -52,7 +65,9 @@ def cmd_pr_matrix(args) -> int:
 
 
 def cmd_release_plan(args) -> int:
-    plans = release_plan(args.root, args.head_sha, registry.index_revision)
+    plans, errors = release_plan(args.root, args.head_sha, registry.index_revision)
+    for error in errors:
+        print(f"::error::{error['image']}: {error['error']}", file=sys.stderr)
     versions = {p["image"]: p["version"] for p in plans if p["mode"] == "build"}
     matrix = [{**entry, "version": versions[entry["image"]]}
               for entry in images.build_matrix(args.root, list(versions))]
@@ -60,6 +75,7 @@ def cmd_release_plan(args) -> int:
     print(f"matrix={json.dumps(matrix or [RELEASE_NONE_ENTRY], separators=(',', ':'))}")
     print(f"has_builds={'true' if matrix else 'false'}")
     print(f"has_releases={'true' if plans else 'false'}")
+    print(f"errors={json.dumps(errors, separators=(',', ':'))}")
     return 0
 
 
@@ -72,7 +88,7 @@ def cmd_release_notes(args) -> int:
     repo = os.environ.get("GITHUB_REPOSITORY", "bill-of-materials/factory")
     server_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
     ref = f"{registry.REGISTRY}/{args.image}"
-    index_digest = registry.digest_of(f"{ref}:{args.version}")
+    index_digest = args.digest or registry.digest_of(f"{ref}:{args.version}")
     platforms = registry.platform_digests(f"{ref}@{index_digest}")
     prev_tag = versioning.latest_tag(args.root, args.image)
     previous = prev_tag.split("/v", 1)[1] if prev_tag else None
@@ -172,6 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run-id", required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--sbom-dir", type=Path, required=True)
+    p.add_argument("--digest", help="index digest; default: resolve the VERSION tag")
     p.add_argument("--provenance-url")
     p.add_argument("--sbom-url", action="append", default=[], metavar="PLATFORM=URL")
     p.set_defaults(func=cmd_release_notes)
