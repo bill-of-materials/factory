@@ -4,12 +4,13 @@ import argparse
 import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from factory_ci import description, images, notes, registry, versioning  # noqa: E402
+from factory_ci import cleanup, description, images, notes, registry, versioning  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -97,6 +98,55 @@ def cmd_release_notes(args) -> int:
     return 0
 
 
+def cleanup_image(org: str, image: str, repo: str, dry_run: bool) -> None:
+    """Delete (or list, in dry-run) the unneeded versions of one image.
+
+    Raises before any deletion when the version graph cannot be fully established.
+    """
+    ref = f"{registry.REGISTRY}/{image}"
+    versions = registry.list_versions(org, image)
+    if not versions:
+        print(f"{image}: no package versions")
+        return
+    listed = {v.digest for v in versions}
+    children: dict[str, list[str]] = {}
+    pending = [v.digest for v in versions]
+    while pending:
+        digest = pending.pop()
+        if digest in children:
+            continue
+        children[digest] = registry.manifest_children(f"{ref}@{digest}")
+        pending.extend(c for c in children[digest] if c not in listed and c not in children)
+
+    now = datetime.now(timezone.utc)
+    selection = cleanup.select(versions, children, now)
+    print(f"{image}: kept {len(selection.keep & listed)}, deleting {len(selection.delete)}")
+    prefix = "DRY-RUN would delete" if dry_run else "deleting"
+    for v in selection.delete:
+        print(f"{prefix} {v.id} {v.digest} {','.join(v.tags)}")
+    if dry_run:
+        return
+    for v in selection.delete:
+        registry.delete_version(org, image, v.id)
+    for release in selection.removed_releases:
+        registry.mark_release_removed(repo, image, release, now.date())
+
+
+def cmd_cleanup(args) -> int:
+    repo = os.environ.get("GITHUB_REPOSITORY", "bill-of-materials/factory")
+    names = [args.image] if args.image else images.list_images(args.root)
+    failed = []
+    for image in names:
+        try:
+            cleanup_image(args.org, image, repo, args.dry_run)
+        except Exception as exc:  # noqa: BLE001 - per-image isolation; nothing more is deleted for it
+            print(f"ERROR {image}: cleanup aborted, no further deletions for this image: {exc!r}")
+            failed.append(image)
+    if failed:
+        print(f"ERROR cleanup failed for: {', '.join(failed)}")
+    return 1 if failed else 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ci.py")
     parser.add_argument("--root", type=Path, default=REPO_ROOT, help=argparse.SUPPRESS)
@@ -125,6 +175,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--provenance-url")
     p.add_argument("--sbom-url", action="append", default=[], metavar="PLATFORM=URL")
     p.set_defaults(func=cmd_release_notes)
+
+    p = sub.add_parser("cleanup", help="delete GHCR versions outside the retention set")
+    p.add_argument("--org", required=True)
+    p.add_argument("--image")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=cmd_cleanup)
     return parser
 
 

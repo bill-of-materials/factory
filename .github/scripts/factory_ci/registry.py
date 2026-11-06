@@ -4,7 +4,10 @@ import json
 import subprocess
 import tempfile
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
+
+from factory_ci.cleanup import Version
 
 REGISTRY = "ghcr.io/bill-of-materials"
 REVISION_ANNOTATION = "org.opencontainers.image.revision"
@@ -76,3 +79,56 @@ def platform_digests(index_ref: str) -> list[tuple[str, str]]:
         name = f"{p['os']}/{p['architecture']}" + (f"/{p['variant']}" if p.get("variant") else "")
         found.append((name, m["digest"]))
     return found
+
+
+def list_versions(org: str, image: str) -> list[Version]:
+    """Every version of the GHCR package; [] when the package does not exist."""
+    try:
+        out = _gh("api", "--paginate", "--slurp", f"/orgs/{org}/packages/container/{image}/versions")
+    except RuntimeError as exc:
+        if "404" in str(exc) or "not found" in str(exc).lower():
+            return []
+        raise
+    return [
+        Version(
+            id=item["id"],
+            digest=item["name"],
+            tags=tuple(item.get("metadata", {}).get("container", {}).get("tags", [])),
+            created_at=datetime.fromisoformat(item["created_at"].replace("Z", "+00:00")),
+        )
+        for page in json.loads(out)
+        for item in page
+    ]
+
+
+def manifest_children(ref: str) -> list[str]:
+    """Digests referenced by the manifest at ref: index entries, or [] for an image manifest."""
+    result = _crane("manifest", ref)
+    if result.returncode != 0:
+        raise RuntimeError(f"crane manifest {ref} failed: {result.stderr.strip()}")
+    return [m["digest"] for m in json.loads(result.stdout).get("manifests", [])]
+
+
+def delete_version(org: str, image: str, version_id: int) -> None:
+    _gh("api", "-X", "DELETE", f"/orgs/{org}/packages/container/{image}/versions/{version_id}")
+
+
+REMOVAL_NOTE_PREFIX = "This image version was removed from the registry on "
+
+
+def mark_release_removed(repo: str, image: str, version: str, today: date) -> None:
+    """Append the removal note to the release notes once; no-op if the release is missing."""
+    tag = f"{image}/v{version}"
+    try:
+        body = _gh("release", "view", tag, "-R", repo, "--json", "body", "--jq", ".body")
+    except RuntimeError as exc:
+        if "not found" in str(exc).lower():
+            return
+        raise
+    if REMOVAL_NOTE_PREFIX in body:
+        return
+    note = f"{REMOVAL_NOTE_PREFIX}{today.isoformat()} (retention: last 10 releases)."
+    with tempfile.TemporaryDirectory() as tmp:
+        notes_file = Path(tmp) / "notes.md"
+        notes_file.write_text(f"{body.rstrip()}\n\n{note}\n")
+        _gh("release", "edit", tag, "-R", repo, "--notes-file", str(notes_file))
