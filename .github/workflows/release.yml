@@ -281,12 +281,27 @@ jobs:
           fi
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
+          # Re-run safety: the version tag may already point at this exact index.
+          if tagged=$(crane digest "$ref:$VERSION" 2> crane.err); then
+            if [[ "$tagged" != "$digest" ]]; then
+              echo "::error::$ref:$VERSION already points at $tagged, not $digest"
+              exit 1
+            fi
+            echo "$ref:$VERSION already tagged; skipping sign, attest and tag"
+            echo "tagged=true" >> "$GITHUB_OUTPUT"
+          elif grep -qiE 'manifest_unknown|not found' crane.err; then
+            echo "tagged=false" >> "$GITHUB_OUTPUT"
+          else
+            cat crane.err
+            exit 1
+          fi
+
       - name: Install Cosign
-        if: matrix.mode == 'build'
+        if: matrix.mode == 'build' && steps.index.outputs.tagged != 'true'
         uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
 
       - name: Sign index and platform manifests
-        if: matrix.mode == 'build'
+        if: matrix.mode == 'build' && steps.index.outputs.tagged != 'true'
         env:
           IMAGE: ${{ matrix.image }}
           DIGEST: ${{ steps.index.outputs.digest }}
@@ -294,7 +309,7 @@ jobs:
 
       - name: Attest index build provenance
         id: provenance
-        if: matrix.mode == 'build'
+        if: matrix.mode == 'build' && steps.index.outputs.tagged != 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-name: ${{ env.REGISTRY }}/${{ matrix.image }}
@@ -331,7 +346,7 @@ jobs:
           cat notes.md
 
       - name: Tag index
-        if: matrix.mode == 'build'
+        if: matrix.mode == 'build' && steps.index.outputs.tagged != 'true'
         env:
           IMAGE: ${{ matrix.image }}
           VERSION: ${{ matrix.version }}
@@ -345,9 +360,22 @@ jobs:
           VERSION: ${{ matrix.version }}
           SHA: ${{ matrix.sha }}
         run: |
+          tag="$IMAGE/v$VERSION"
+          if draft=$(gh release view "$tag" --json isDraft --jq .isDraft 2> gh.err); then
+            if [[ "$draft" == "false" ]]; then
+              echo "Release $tag already published; nothing to do"
+              exit 0
+            fi
+            echo "Deleting leftover draft release $tag"
+            gh release delete "$tag" --yes
+          elif ! grep -qi 'not found' gh.err; then
+            cat gh.err
+            exit 1
+          fi
+
           shopt -s nullglob
           sboms=(sboms/*)
-          gh release create "$IMAGE/v$VERSION" \
+          gh release create "$tag" \
             --target "$SHA" \
             --title "$IMAGE $VERSION" \
             --notes-file notes.md \
