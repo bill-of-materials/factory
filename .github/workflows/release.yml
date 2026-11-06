@@ -179,7 +179,7 @@ jobs:
     needs:
       - plan
       - build
-    if: always() && needs.plan.result == 'success' && needs.plan.outputs.has_releases == 'true'
+    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.has_releases == 'true' }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -345,7 +345,7 @@ jobs:
     needs:
       - plan
       - publish
-    if: always() && needs.plan.outputs.has_releases == 'true'
+    if: ${{ !cancelled() && needs.plan.outputs.has_releases == 'true' }}
     permissions:
       contents: write
       packages: write
