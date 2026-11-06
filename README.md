@@ -2,6 +2,83 @@
 
 BOM OCI-image library and builder
 
+## Images
+
+| Image | Description | Platforms | Links |
+| --- | --- | --- | --- |
+| `alpine3` | Hardened Alpine 3 base image with a non-root app user, dumb-init, curl and CA certificates. | amd64, arm64, arm/v7 | [Package](https://github.com/orgs/bill-of-materials/packages/container/package/alpine3), [Releases](https://github.com/bill-of-materials/factory/releases?q=alpine3) |
+| `debian13-slim` | Hardened Debian 13 (trixie) slim base image with a non-root app user, dumb-init, curl and CA certificates. | amd64, arm64, arm/v7 | [Package](https://github.com/orgs/bill-of-materials/packages/container/package/debian13-slim), [Releases](https://github.com/bill-of-materials/factory/releases?q=debian13-slim) |
+| `ninjam` | NINJAM server (ninjamsrv) built from source on the alpine3 base image. | amd64 | [Package](https://github.com/orgs/bill-of-materials/packages/container/package/ninjam), [Releases](https://github.com/bill-of-materials/factory/releases?q=ninjam) |
+| `snapcast` | Snapcast server (snapserver) on the alpine3 base image. | amd64, arm64, arm/v7 | [Package](https://github.com/orgs/bill-of-materials/packages/container/package/snapcast), [Releases](https://github.com/bill-of-materials/factory/releases?q=snapcast) |
+
+Pull with `docker pull ghcr.io/bill-of-materials/<image>:<version>`.
+
+## Versioning
+
+Each image is versioned on its own with semver. Every push to `main` that
+changes an image folder releases that image; changes that only touch `.md`
+files do not.
+
+The bump is computed from the commits since the previous release:
+
+- major: a `type!:` or `type(scope)!:` subject, or `BREAKING CHANGE:` in the body
+- minor: a `feat` commit
+- patch: anything else
+
+The first release is `1.0.0`. Each release is tagged `X.Y.Z`, `X.Y`, `X` and
+`latest` in the registry, and gets a GitHub Release named `<image>/vX.Y.Z`
+with the digests, changelog and SBOMs. A published `X.Y.Z` never moves.
+
+## Verify an image
+
+Every release is signed with cosign (keyless) and carries GitHub provenance and
+SBOM attestations. Use the digest from the release notes:
+
+```bash
+cosign verify ghcr.io/bill-of-materials/<image>@<digest> \
+  --certificate-identity-regexp '^https://github.com/bill-of-materials/factory/\.github/workflows/release\.yml@refs/heads/main$' \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com
+gh attestation verify oci://ghcr.io/bill-of-materials/<image>@<digest> -R bill-of-materials/factory
+```
+
+## Retention
+
+Only the last 10 releases of each image are kept in the registry, plus the
+versions that `X`, `X.Y` and `latest` point to and anything younger than 24
+hours. Cleanup runs after every release and weekly. It can also be started from
+the Actions tab (`cleanup`, dry-run by default). A removed version keeps its
+GitHub Release, with a note saying it was removed from the registry.
+
+## Setup notes
+
+- For each package: Package settings, Manage Actions access, add
+  `bill-of-materials/factory` with the **Admin** role (untick "Inherit access
+  from source repository" if needed).
+- Package visibility: Public.
+- Required status check: `validation-required`.
+
+## Supply-chain architecture
+
+```mermaid
+flowchart TD
+    subgraph PR["Pull request (validate)"]
+        direction LR
+        PB["Build each platform"] --> PT["Structure tests"]
+    end
+    subgraph Main["Push to main (release)"]
+        direction TD
+        B["Build each platform<br/>(native amd64/arm64, QEMU arm/v7)<br/>push by digest"]
+        T["Test pushed digest"]
+        A["SBOM + provenance attestations"]
+        I["Multi-arch index"]
+        S["Cosign sign (recursive)"]
+        G["Tags X.Y.Z, X.Y, X, latest"]
+        R["GitHub Release"]
+        C["Cleanup"]
+        B --> T --> A --> I --> S --> G --> R --> C
+    end
+```
+
 ## Manual build of any image
 
 ```bash
@@ -24,26 +101,7 @@ file next to its `Dockerfile` containing a comma-separated list of platforms:
 linux/amd64,linux/arm64
 ```
 
-The `validate` workflow builds and runs the structure tests against every
-listed platform (via QEMU emulation), and the `release` workflow publishes a
-single multi-arch manifest for the same list.
-
-## Supply-chain architecture
-
-```mermaid
-flowchart TD
-    Source["Source Code"]
-    Build["Buildx (Multi-Arch)"]
-    Image["Identical OCI Image per Arch"]
-    SBOM["SBOM (Per Image)"]
-    Provenance["Provenance Attestation"]
-    Sign["Cosign Signing (Digest-Based)"]
-    Registry["Registry (Immutable Tags + Digests)"]
-
-    Source --> Build
-    Build --> Image
-    Image --> SBOM
-    SBOM --> Provenance
-    Provenance --> Sign
-    Sign --> Registry
-```
+On pull requests, the `validate` workflow builds and runs the structure tests
+for every listed platform. On `main`, the `release` workflow builds each
+platform natively (amd64 and arm64 on their own runners, arm/v7 under QEMU),
+tests the pushed digests and publishes one multi-arch index.
