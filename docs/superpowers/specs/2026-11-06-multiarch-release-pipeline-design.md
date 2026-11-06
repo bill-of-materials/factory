@@ -77,8 +77,8 @@ the signature and the attestations.
   tests.
 - Publishing any per-arch image without a signature.
 - Cleanup deleting something still needed: a kept release, its per-arch
-  children, its signatures/attestations, or a digest still referenced by a
-  `FROM` line on `main`.
+  children, or its signatures/attestations. (Digests pinned in Dockerfiles
+  are deliberately *not* protected; see "Migration / first run".)
 - Increasing the number of PRs or approvals the owner has to handle.
 - Requiring a manual step (version numbers, tags, cleanup runs) in normal
   operation.
@@ -286,10 +286,6 @@ in the repo.
   includes their index manifests, every per-arch child manifest, and all
   signatures/attestations/SBOMs attached to any of those digests (cosign
   `.sig`/`.att` tags and OCI referrers alike).
-- Any digest (and its children and attachments) referenced by a `FROM ...@sha256:`
-  line in any Dockerfile on `main`. This protects dependents during the
-  window before Renovate updates them, and the current
-  `alpine3:latest@sha256:9eee99e…` pins during migration.
 - Anything that is the target of a floating tag (`X`, `X.Y`, `latest`). By
   construction these are within the 10, but this is a safety check.
 - Anything pushed in the last 24 h (my call). This protects an
@@ -327,8 +323,16 @@ Renovate's current behaviour.
 
 - The first release creates `1.0.0` for every existing image (no tags exist
   yet).
-- Legacy sha-tagged versions are removed by cleanup, except digests still
-  pinned in Dockerfiles. Those survive until Renovate moves the pins.
+- Legacy sha-tagged versions are removed by the first cleanup, **including
+  the `alpine3@sha256:9eee99e…` still pinned by `ninjam` and `snapcast`**
+  (owner's decision: it contains known vulnerabilities, and nothing is in
+  production yet). Digests pinned in Dockerfiles get no special protection.
+  Consequences, accepted:
+  - `ninjam` and `snapcast` 1.0.0 are built on that old base (they are built
+    before cleanup runs); Renovate's follow-up PR moves them to `alpine3`
+    1.0.0 and produces their 1.0.1.
+  - Until that PR is merged, any rebuild of `ninjam`/`snapcast` fails because
+    their pinned base is gone. The Renovate PR itself fixes this.
 - The README gains: an image table (name, description, platforms, link to
   package and releases), a "Verify an image" section, a short explanation
   of versioning (how bumps are chosen), retention (last 10 releases), and
