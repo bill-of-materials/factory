@@ -102,6 +102,8 @@ def cmd_release_notes(args) -> int:
         sboms = [a for a in registry.fetch_attestations(repo, ref, digest)
                  if a.predicate_type.startswith(notes.SBOM_TYPE_PREFIX)]
         if not sboms:
+            print(f"::warning::{args.image} {args.version}: no SBOM attestation for {platform} "
+                  f"({digest})", file=sys.stderr)
             continue
         name = f"{args.image}-{args.version}-{images.platform_slug(platform)}.spdx.json"
         (args.sbom_dir / name).write_text(json.dumps(sboms[0].predicate))

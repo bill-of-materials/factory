@@ -332,7 +332,9 @@ jobs:
             # The index is not tagged yet: name it by digest.
             links+=(--digest "$DIGEST" --provenance-url "$PROVENANCE_URL")
             while read -r platform _digest url; do
-              links+=(--sbom-url "$platform=$url")
+              if [[ -n "$url" ]]; then
+                links+=(--sbom-url "$platform=$url")
+              fi
             done < <(cat digests/*.txt)
           fi
           python3 .github/scripts/ci.py release-notes \
