@@ -224,8 +224,13 @@ different bytes. So:
 - on retry, if `X.Y.Z` already exists in the registry with
   `org.opencontainers.image.revision == HEAD`, nothing is rebuilt; only the
   missing steps (attestation, git tag, GitHub Release) are completed;
-- if `X.Y.Z` exists for a *different* revision (should never happen), the
-  release fails loudly rather than overwrite it.
+- if that revision is an *ancestor* of HEAD (a partial publish followed by
+  a new commit), the release is resumed the same way, from that revision:
+  the git tag and GitHub Release point at the commit the image was built
+  from;
+- if `X.Y.Z` exists for any other revision (should never happen), that
+  image's release fails loudly rather than overwrite it; the other images
+  of the push are still released and the run is marked failed.
 
 Images in the same push are released independently (`fail-fast: false`).
 Releases are serialized with a concurrency group, without cancellation.
