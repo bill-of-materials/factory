@@ -29,7 +29,7 @@ class ReleasePlanTest(unittest.TestCase):
         return plans, errors
 
     def test_build_when_version_absent(self):
-        plans, errors = self.plan(lambda ref: None)
+        plans, errors = self.plan(lambda ref, **_: None)
         self.assertEqual(errors, [])
         self.assertEqual(len(plans), 1)
         self.assertEqual(plans[0]["image"], "alpine3")
@@ -41,15 +41,15 @@ class ReleasePlanTest(unittest.TestCase):
 
     def test_lookup_uses_registry_ref(self):
         refs = []
-        self.plan(lambda ref: refs.append(ref))
+        self.plan(lambda ref, **_: refs.append(ref))
         self.assertEqual(refs, ["ghcr.io/bill-of-materials/alpine3:1.0.0"])
 
     def test_resume_when_same_revision(self):
-        plans, errors = self.plan(lambda ref: self.head)
+        plans, errors = self.plan(lambda ref, **_: self.head)
         self.assertEqual(errors, [])
         self.assertEqual(plans[0]["mode"], "resume")
         self.assertEqual(plans[0]["sha"], self.head)
-        out = self._cli(lambda ref: self.head)
+        out = self._cli(lambda ref, **_: self.head)
         self.assertIn("matrix=" + ci.json.dumps([ci.RELEASE_NONE_ENTRY], separators=(",", ":")), out)
         self.assertIn("has_builds=false", out)
         self.assertIn("has_releases=true", out)
@@ -57,7 +57,7 @@ class ReleasePlanTest(unittest.TestCase):
 
     def test_resume_from_ancestor_revision(self):
         # partial publish from an earlier commit, then a new commit landed
-        plans, errors = self.plan(lambda ref: self.base)
+        plans, errors = self.plan(lambda ref, **_: self.base)
         self.assertEqual(errors, [])
         self.assertEqual(plans[0]["mode"], "resume")
         self.assertEqual(plans[0]["sha"], self.base)
@@ -72,7 +72,7 @@ class ReleasePlanTest(unittest.TestCase):
         self.repo.checkout("main")
         self._change_ninjam()
 
-        def lookup(ref):
+        def lookup(ref, **_):
             return side if "/alpine3:" in ref else None
 
         plans, errors = self.plan(lookup)
@@ -84,7 +84,7 @@ class ReleasePlanTest(unittest.TestCase):
 
     def test_unknown_or_missing_commit_revision_is_error(self):
         for published in ("<unknown>", "deadbeef" * 5):
-            plans, errors = self.plan(lambda ref: published)
+            plans, errors = self.plan(lambda ref, **_: published)
             self.assertEqual(plans, [])
             self.assertEqual([e["image"] for e in errors], ["alpine3"])
             self.assertIn("already published", errors[0]["error"])
@@ -93,19 +93,29 @@ class ReleasePlanTest(unittest.TestCase):
         self._change_ninjam()
         stderr = io.StringIO()
         with redirect_stderr(stderr):
-            out = self._cli(lambda ref: "<unknown>" if "/alpine3:" in ref else None)
+            out = self._cli(lambda ref, **_: "<unknown>" if "/alpine3:" in ref else None)
         self.assertIn("has_releases=true", out)
         self.assertIn('"image":"ninjam"', out)
         errors_line = next(line for line in out.splitlines() if line.startswith("errors="))
         self.assertEqual([e["image"] for e in json.loads(errors_line[len("errors="):])], ["alpine3"])
         self.assertIn("::error::alpine3", stderr.getvalue())
 
+    def test_lookup_told_whether_image_was_ever_released(self):
+        self._change_ninjam()
+        calls = {}
+
+        def lookup(ref, never_released):
+            calls[ref.split("/")[-1]] = never_released
+
+        self.plan(lookup)
+        self.assertEqual(calls, {"alpine3:1.0.0": True, "ninjam:1.0.1": False})
+
     def test_images_without_changes_excluded(self):
-        plans, _ = self.plan(lambda ref: None)
+        plans, _ = self.plan(lambda ref, **_: None)
         self.assertNotIn("ninjam", [p["image"] for p in plans])
 
     def test_cli_build_matrix_has_version(self):
-        out = self._cli(lambda ref: None)
+        out = self._cli(lambda ref, **_: None)
         self.assertIn("has_builds=true", out)
         self.assertIn("has_releases=true", out)
         self.assertIn('"version":"1.0.0"', out)
@@ -145,6 +155,16 @@ class IndexRevisionTest(unittest.TestCase):
         with self._run(1, "", "UNAUTHORIZED: denied"):
             with self.assertRaises(RuntimeError):
                 registry.index_revision("r/x:1.0.0")
+
+    def test_denied_is_absent_only_for_never_released_image(self):
+        for err in ("DENIED: requested access to the resource is denied",
+                    "UNAUTHORIZED: authentication required",
+                    "GET https://ghcr.io/v2/x/manifests/1.0.0: unexpected status code 403 Forbidden"):
+            with self._run(1, "", err):
+                self.assertIsNone(registry.index_revision("r/x:1.0.0", never_released=True))
+            with self._run(1, "", err):
+                with self.assertRaises(RuntimeError):
+                    registry.index_revision("r/x:1.0.0", never_released=False)
 
     def test_digest_of(self):
         with self._run(0, "sha256:abc\n"):
