@@ -101,12 +101,22 @@ def list_versions(org: str, image: str) -> list[Version]:
     ]
 
 
-def manifest_children(ref: str) -> list[str]:
-    """Digests referenced by the manifest at ref: index entries, or [] for an image manifest."""
+@dataclass(frozen=True)
+class ManifestLinks:
+    children: list[str]  # index entries; [] for an image manifest
+    subject: str | None  # OCI referrer `subject` digest
+
+
+def manifest_links(ref: str) -> ManifestLinks:
+    """Digests the manifest at ref points to: its index entries and its OCI subject."""
     result = _crane("manifest", ref)
     if result.returncode != 0:
         raise RuntimeError(f"crane manifest {ref} failed: {result.stderr.strip()}")
-    return [m["digest"] for m in json.loads(result.stdout).get("manifests", [])]
+    manifest = json.loads(result.stdout)
+    return ManifestLinks(
+        [m["digest"] for m in manifest.get("manifests", [])],
+        manifest.get("subject", {}).get("digest"),
+    )
 
 
 def delete_version(org: str, image: str, version_id: int) -> None:

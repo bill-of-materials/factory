@@ -47,7 +47,14 @@ def select(
     children: dict[str, list[str]],
     now: datetime,
     keep_releases: int = 10,
+    subjects: dict[str, str] | None = None,
 ) -> Selection:
+    """Select versions to delete.
+
+    children maps a digest to the digests its manifest references; subjects maps a
+    referrer digest to its OCI `subject` digest. Children, `sha256-<hex>*` attachment
+    tags and referrers of a kept digest are kept too (closure).
+    """
     releases = sorted(
         ((_semver(t), v.digest) for v in versions for t in v.tags if _semver(t)),
         reverse=True,
@@ -64,6 +71,8 @@ def select(
             target = _attached_to(t)
             if target:
                 attachments.setdefault(target, []).append(v.digest)
+    for referrer, subject in (subjects or {}).items():
+        attachments.setdefault(subject, []).append(referrer)
 
     pending = list(keep)
     while pending:
