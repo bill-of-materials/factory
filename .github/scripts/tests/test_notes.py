@@ -1,8 +1,10 @@
 import base64
+import io
 import json
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stderr
 from pathlib import Path
 from unittest import mock
 
@@ -120,7 +122,7 @@ class PlatformDigestsTest(unittest.TestCase):
 
 
 class CliTest(unittest.TestCase):
-    def run_cli(self, *extra):
+    def run_cli(self, *extra, attestations=None):
         sbom = registry.Attestation("https://spdx.dev/Document/v2.3", {"spdxVersion": "SPDX-2.3"})
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
@@ -128,11 +130,15 @@ class CliTest(unittest.TestCase):
         self.sboms = Path(self.tmp.name) / "sbom"
         with mock.patch.object(registry, "digest_of", return_value=INDEX) as self.digest_of, \
                 mock.patch.object(registry, "platform_digests", return_value=[("linux/arm/v7", ARM)]) as self.platform_digests, \
-                mock.patch.object(registry, "fetch_attestations", return_value=[sbom]), \
+                mock.patch.object(registry, "fetch_attestations",
+                                  return_value=[sbom] if attestations is None else attestations), \
                 mock.patch.object(ci.versioning, "latest_tag", return_value="ninjam/v1.4.1"), \
                 mock.patch.object(ci.versioning, "commits_since", return_value=[Commit(SHA, "fix: x", "")]):
-            rc = ci.main(["release-notes", "--image", "ninjam", "--version", "1.4.2", "--sha", SHA,
-                          "--run-id", "9", "--out", str(self.out), "--sbom-dir", str(self.sboms), *extra])
+            self.stderr = io.StringIO()
+            with redirect_stderr(self.stderr):
+                rc = ci.main(["release-notes", "--image", "ninjam", "--version", "1.4.2", "--sha", SHA,
+                              "--run-id", "9", "--out", str(self.out), "--sbom-dir", str(self.sboms),
+                              *extra])
         self.assertEqual(rc, 0)
         return self.out.read_text()
 
@@ -154,6 +160,16 @@ class CliTest(unittest.TestCase):
         text = self.run_cli()
         self.assertIn("https://github.com/bill-of-materials/factory/attestations", text)
         self.assertNotIn("None", text)
+
+    def test_missing_sbom_attestation_warns(self):
+        self.run_cli(attestations=[])
+        self.assertIn("::warning::", self.stderr.getvalue())
+        self.assertIn("linux/arm/v7", self.stderr.getvalue())
+        self.assertFalse(self.sboms.exists() and any(self.sboms.iterdir()))
+
+    def test_sbom_present_no_warning(self):
+        self.run_cli()
+        self.assertEqual(self.stderr.getvalue(), "")
 
     def test_explicit_digest_skips_tag_lookup(self):
         other = "sha256:" + "9" * 64
