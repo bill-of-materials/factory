@@ -77,18 +77,13 @@ def cmd_release_notes(args) -> int:
     previous = prev_tag.split("/v", 1)[1] if prev_tag else None
     commits = versioning.commits_since(args.root, args.image, prev_tag, head=args.sha)
 
-    provenance = [a for a in registry.fetch_attestations(repo, ref, index_digest)
-                  if a.predicate_type == notes.PROVENANCE_TYPE]
-    provenance_url = provenance[0].url if provenance else None
-    sbom_urls: dict[str, str] = {}
+    sbom_urls = dict(item.split("=", 1) for item in args.sbom_url)
     args.sbom_dir.mkdir(parents=True, exist_ok=True)
     for platform, digest in platforms:
         sboms = [a for a in registry.fetch_attestations(repo, ref, digest)
                  if a.predicate_type.startswith(notes.SBOM_TYPE_PREFIX)]
         if not sboms:
             continue
-        if sboms[0].url:
-            sbom_urls[platform] = sboms[0].url
         name = f"{args.image}-{args.version}-{images.platform_slug(platform)}.spdx.json"
         (args.sbom_dir / name).write_text(json.dumps(sboms[0].predicate))
 
@@ -96,7 +91,7 @@ def cmd_release_notes(args) -> int:
         image=args.image, version=args.version, previous_version=previous,
         index_digest=index_digest, platforms=platforms, commits=commits, repo=repo,
         server_url=server_url, sha=args.sha, run_id=args.run_id,
-        provenance_url=provenance_url, sbom_urls=sbom_urls,
+        provenance_url=args.provenance_url, sbom_urls=sbom_urls,
     )
     args.out.write_text(notes.render_release_notes(ctx))
     return 0
@@ -127,6 +122,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--run-id", required=True)
     p.add_argument("--out", type=Path, required=True)
     p.add_argument("--sbom-dir", type=Path, required=True)
+    p.add_argument("--provenance-url")
+    p.add_argument("--sbom-url", action="append", default=[], metavar="PLATFORM=URL")
     p.set_defaults(func=cmd_release_notes)
     return parser
 

@@ -38,16 +38,8 @@ def digest_of(ref: str) -> str:
 
 @dataclass(frozen=True)
 class Attestation:
-    id: int | None
     predicate_type: str
     predicate: dict
-    repo: str = "bill-of-materials/factory"
-
-    @property
-    def url(self) -> str | None:
-        if self.id is None:
-            return None
-        return f"https://github.com/{self.repo}/attestations/{self.id}"
 
 
 def _gh(*args: str, cwd: str | None = None) -> str:
@@ -58,25 +50,18 @@ def _gh(*args: str, cwd: str | None = None) -> str:
 
 
 def fetch_attestations(repo: str, ref: str, digest: str) -> list[Attestation]:
-    """Attestations of ref@digest: statements from the downloaded bundles, ids from the REST API.
-
-    Ids are matched to bundles by order, only when both lists have the same length.
-    """
+    """Predicates of the attestations of ref@digest, read from the downloaded Sigstore bundles."""
     with tempfile.TemporaryDirectory() as tmp:
         _gh("attestation", "download", f"oci://{ref}@{digest}", "-R", repo, cwd=tmp)
         lines = [line for f in sorted(Path(tmp).glob("*.jsonl"))
                  for line in f.read_text().splitlines() if line.strip()]
-    statements = []
+    found = []
     for line in lines:
         bundle = json.loads(line)
         bundle = bundle.get("bundle", bundle)
-        statements.append(json.loads(base64.b64decode(bundle["dsseEnvelope"]["payload"])))
-    api = json.loads(_gh("api", f"repos/{repo}/attestations/{digest}"))
-    ids = [a.get("id") for a in api.get("attestations", [])]
-    if len(ids) != len(statements):
-        ids = [None] * len(statements)
-    return [Attestation(i, s["predicateType"], s.get("predicate", {}), repo)
-            for i, s in zip(ids, statements)]
+        statement = json.loads(base64.b64decode(bundle["dsseEnvelope"]["payload"]))
+        found.append(Attestation(statement["predicateType"], statement.get("predicate", {})))
+    return found
 
 
 def platform_digests(index_ref: str) -> list[tuple[str, str]]:
