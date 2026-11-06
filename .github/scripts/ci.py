@@ -2,13 +2,14 @@
 """CI entry point: one argparse subcommand per workflow decision."""
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from factory_ci import description, images, registry, versioning  # noqa: E402
+from factory_ci import description, images, notes, registry, versioning  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -66,6 +67,41 @@ def cmd_description(args) -> int:
     return 0
 
 
+def cmd_release_notes(args) -> int:
+    repo = os.environ.get("GITHUB_REPOSITORY", "bill-of-materials/factory")
+    server_url = os.environ.get("GITHUB_SERVER_URL", "https://github.com")
+    ref = f"{registry.REGISTRY}/{args.image}"
+    index_digest = registry.digest_of(f"{ref}:{args.version}")
+    platforms = registry.platform_digests(f"{ref}@{index_digest}")
+    prev_tag = versioning.latest_tag(args.root, args.image)
+    previous = prev_tag.split("/v", 1)[1] if prev_tag else None
+    commits = versioning.commits_since(args.root, args.image, prev_tag, head=args.sha)
+
+    provenance = [a for a in registry.fetch_attestations(repo, ref, index_digest)
+                  if a.predicate_type == notes.PROVENANCE_TYPE]
+    provenance_url = provenance[0].url if provenance else None
+    sbom_urls: dict[str, str] = {}
+    args.sbom_dir.mkdir(parents=True, exist_ok=True)
+    for platform, digest in platforms:
+        sboms = [a for a in registry.fetch_attestations(repo, ref, digest)
+                 if a.predicate_type.startswith(notes.SBOM_TYPE_PREFIX)]
+        if not sboms:
+            continue
+        if sboms[0].url:
+            sbom_urls[platform] = sboms[0].url
+        name = f"{args.image}-{args.version}-{images.platform_slug(platform)}.spdx.json"
+        (args.sbom_dir / name).write_text(json.dumps(sboms[0].predicate))
+
+    ctx = notes.ReleaseContext(
+        image=args.image, version=args.version, previous_version=previous,
+        index_digest=index_digest, platforms=platforms, commits=commits, repo=repo,
+        server_url=server_url, sha=args.sha, run_id=args.run_id,
+        provenance_url=provenance_url, sbom_urls=sbom_urls,
+    )
+    args.out.write_text(notes.render_release_notes(ctx))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ci.py")
     parser.add_argument("--root", type=Path, default=REPO_ROOT, help=argparse.SUPPRESS)
@@ -83,6 +119,15 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("description", help="print the package description for an image")
     p.add_argument("--image", required=True)
     p.set_defaults(func=cmd_description)
+
+    p = sub.add_parser("release-notes", help="render release notes and extract SBOM files")
+    p.add_argument("--image", required=True)
+    p.add_argument("--version", required=True)
+    p.add_argument("--sha", required=True)
+    p.add_argument("--run-id", required=True)
+    p.add_argument("--out", type=Path, required=True)
+    p.add_argument("--sbom-dir", type=Path, required=True)
+    p.set_defaults(func=cmd_release_notes)
     return parser
 
 
