@@ -145,6 +145,9 @@ def cleanup_image(org: str, image: str, repo: str, dry_run: bool) -> None:
     now = datetime.now(timezone.utc)
     selection = cleanup.select(versions, children, now, subjects=subjects)
     print(f"{image}: kept {len(selection.keep & listed)}, deleting {len(selection.delete)}")
+    for v in versions:
+        if v.digest in selection.keep:
+            print(f"keeping {v.digest} {','.join(v.tags)}".rstrip())
     prefix = "DRY-RUN would delete" if dry_run else "deleting"
     for v in selection.delete:
         print(f"{prefix} {v.id} {v.digest} {','.join(v.tags)}")
