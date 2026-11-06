@@ -54,3 +54,4 @@ yarn-error.log*
 !.env.sample
 !.vscode/extensions.json
 !.vscode/settings.json
+__pycache__/
