@@ -1,0 +1,44 @@
+name: cleanup
+
+on:
+  workflow_call:
+    inputs:
+      dry-run:
+        type: boolean
+        default: false
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+    inputs:
+      dry-run:
+        description: List what would be deleted without deleting
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: ghcr-cleanup
+  cancel-in-progress: false
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
+
+      - name: Login to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Clean up GHCR versions
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 .github/scripts/ci.py cleanup --org bill-of-materials ${{ inputs.dry-run && '--dry-run' || '' }}
