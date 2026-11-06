@@ -24,7 +24,7 @@
 - `cosign sign --yes --recursive` on the index digest. No cosign SBOM attestation. GitHub attestations (provenance on index + per-arch, SBOM per-arch) with `push-to-registry: false`.
 - Published `X.Y.Z` never moves: exists with `org.opencontainers.image.revision == HEAD` → resume (no rebuild); exists with another revision → fail.
 - Package description = Dockerfile `LABEL org.opencontainers.image.description` + ` Signed multi-arch image. Release notes, changelog & verification: https://github.com/bill-of-materials/factory/releases?q=<image>`; ≤ 512 chars; set as index annotation.
-- Cleanup keep set: 10 most recent semver releases + closure (children, `sha256-<hex>*` attachment tags and their children) + digests pinned in any Dockerfile on `main` + targets of `X`, `X.Y`, `latest` + anything created < 24 h ago. Runs after every release, weekly, and manually (dry-run default for manual).
+- Cleanup keep set: 10 most recent semver releases + closure (children, `sha256-<hex>*` attachment tags and their children) + targets of `X`, `X.Y`, `latest` + anything created < 24 h ago. Runs after every release, weekly, and manually (dry-run default for manual).
 - Removed-release note, appended once: `This image version was removed from the registry on YYYY-MM-DD (retention: last 10 releases).`
 - Required check name stays `validation-required`.
 - All actions pinned by full commit sha with `# vX` comment (Renovate keeps them updated). Look up current shas with `gh api repos/<owner>/<action>/commits/<tag> --jq .sha`; reuse shas already in the repo for actions already used.
@@ -33,7 +33,7 @@
 
 1. A single Renovate commit touching two image folders → both images get a patch release, and that commit appears in both changelogs. (Task 2 test `test_commit_touching_two_images_bumps_both`.)
 2. Non-squash merge history (merge commit + its branch commits) → each branch commit counted once, the merge commit ignored. (Task 2 test `test_merge_commits_ignored`.)
-3. A legacy sha-tagged version still pinned by `ninjam/Dockerfile` (`alpine3:latest@sha256:9eee99e…`) → never deleted by cleanup. (Task 6 test `test_pinned_legacy_digest_kept`.)
+3. Legacy sha-tagged versions from the old pipeline (no semver tag, older than 24 h) → deleted together with their children and attachments, even if a Dockerfile still pins them (owner's decision). (Task 6 test `test_legacy_sha_tagged_deleted`.)
 4. A platform with no explicit mapping (e.g. `linux/riscv64`) → `ubuntu-24.04` with QEMU, not a crash. (Task 1 test `test_unknown_platform_falls_back_to_qemu`.)
 5. Retry after a partial release → `X.Y.Z` present with revision HEAD resumes without rebuilding; present with another revision fails loudly. (Task 4 tests `test_resume_when_same_revision`, `test_fails_when_other_revision`.)
 
@@ -49,7 +49,7 @@
 .github/scripts/factory_ci/description.py   package description from Dockerfile label
 .github/scripts/factory_ci/registry.py      crane/gh wrappers: manifest, revision lookup, versions list/delete, attestations
 .github/scripts/factory_ci/notes.py         release notes rendering
-.github/scripts/factory_ci/cleanup.py       pure keep/delete selection + pinned digests
+.github/scripts/factory_ci/cleanup.py       pure keep/delete selection
 .github/scripts/tests/__init__.py
 .github/scripts/tests/helpers.py            temp git repo builder
 .github/scripts/tests/test_images.py
@@ -262,12 +262,11 @@ Label texts (my copy, exact):
 - Produces:
   - `@dataclass(frozen=True) Version(id: int, digest: str, tags: tuple[str, ...], created_at: datetime)`
   - `class IncompleteGraph(Exception)`
-  - `pinned_digests(root: Path, image: str) -> set[str]` — every `ghcr.io/bill-of-materials/<image>[:tag]@sha256:<hex>` in any `*/Dockerfile`
   - `@dataclass Selection(keep: set[str], delete: list[Version], removed_releases: list[str])` — `removed_releases` = `X.Y.Z` tags on deleted versions
-  - `select(versions: list[Version], children: dict[str, list[str]], pinned: set[str], now: datetime, keep_releases: int = 10) -> Selection`
+  - `select(versions: list[Version], children: dict[str, list[str]], now: datetime, keep_releases: int = 10) -> Selection`
 
 Algorithm (not determined by the signature):
-1. Roots = digests of the `keep_releases` highest semver `X.Y.Z` tags ∪ targets of tags matching `^\d+$`, `^\d+\.\d+$`, `latest` ∪ `pinned` (only those present in versions) ∪ versions with `now - created_at < 24h`.
+1. Roots = digests of the `keep_releases` highest semver `X.Y.Z` tags ∪ targets of tags matching `^\d+$`, `^\d+\.\d+$`, `latest` ∪ versions with `now - created_at < 24h`.
 2. Closure to a fixed point: add `children[d]` for each kept `d`; add every version having a tag `sha256-<hex>` or `sha256-<hex>.<suffix>` where `sha256:<hex>` is kept.
 3. If a kept digest is not a key in `children` → `IncompleteGraph(digest)` (the I/O layer must fetch every version's manifest; leaf manifests map to `[]`).
 4. `delete` = versions whose digest is not kept, sorted by `created_at`.
@@ -277,10 +276,9 @@ Algorithm (not determined by the signature):
   - `test_semver_order_not_creation_order`
   - `test_children_and_signatures_of_kept_kept` (index → 3 children; `sha256-<idx>.sig`, `sha256-<child>.sig`, referrers tag `sha256-<idx>` whose index lists a referrer manifest → all kept)
   - `test_attachments_of_deleted_deleted`
-  - `test_pinned_legacy_digest_kept` (legacy version tagged with a 40-char sha, pinned → kept with its children)
+  - `test_legacy_sha_tagged_deleted` (version tagged only with a 40-char sha, 2 days old, with children and a `.sig` → all deleted)
   - `test_untagged_orphans_deleted`, `test_recent_untagged_kept_24h`
   - `test_missing_children_raises` → `IncompleteGraph`
-  - `test_pinned_digests_scans_dockerfiles` (fixture with `ghcr.io/bill-of-materials/alpine3:latest@sha256:9eee…` in `ninjam/Dockerfile`)
 - [ ] **Step 2: Run tests, expect FAIL.**
 - [ ] **Step 3: Implement `cleanup.py`.**
 - [ ] **Step 4: Run tests, expect PASS.**
@@ -295,7 +293,7 @@ Algorithm (not determined by the signature):
 - Create: `.github/workflows/cleanup.yml`
 
 **Interfaces:**
-- Consumes: `cleanup.select`, `cleanup.pinned_digests`, `cleanup.Version`, `cleanup.IncompleteGraph`.
+- Consumes: `cleanup.select`, `cleanup.Version`, `cleanup.IncompleteGraph`.
 - Produces (`registry.py`):
   - `list_versions(org: str, image: str) -> list[Version]` — `gh api --paginate /orgs/{org}/packages/container/{image}/versions`; tags from `metadata.container.tags`; returns `[]` if the package is 404
   - `manifest_children(ref: str) -> list[str]` — `crane manifest`; index → `manifests[].digest`; image manifest → `[]`
@@ -310,7 +308,7 @@ Algorithm (not determined by the signature):
 - [ ] **Step 1: Write failing test** `test_cleanup_cli_dry_run_deletes_nothing` patching `registry.list_versions`, `registry.manifest_children`, `registry.delete_version`, `registry.mark_release_removed`: dry-run → `delete_version` never called; real → called with the selected ids and `mark_release_removed` called for each removed release.
 - [ ] **Step 2: Run, expect FAIL.**
 - [ ] **Step 3: Implement registry functions, CLI, `cleanup.yml`.**
-- [ ] **Step 4: Run tests (PASS) and actionlint (no errors).** Then run read-only against the real registry: `python3 .github/scripts/ci.py cleanup --org bill-of-materials --dry-run` (needs a token with `read:packages`; if missing, ask the owner to run `gh auth refresh -s read:packages`). Expected: legacy sha-tagged versions listed for deletion, the digest pinned in `ninjam/Dockerfile` and `snapcast/Dockerfile` (`9eee99e…`) listed as kept.
+- [ ] **Step 4: Run tests (PASS) and actionlint (no errors).** Then run read-only against the real registry: `python3 .github/scripts/ci.py cleanup --org bill-of-materials --dry-run` (needs a token with `read:packages`; if missing, ask the owner to run `gh auth refresh -s read:packages`). Expected: legacy sha-tagged versions listed for deletion, including `alpine3@sha256:9eee99e…`.
 - [ ] **Step 5: Commit** — `feat(ci): add automatic GHCR cleanup workflow`
 
 ---
@@ -406,5 +404,6 @@ Pushing the branch, opening the PR and merging are outward-facing: **ask the own
   - `docker buildx imagetools inspect ghcr.io/bill-of-materials/ninjam:1.0.0` → only real platforms, no `unknown/unknown`
   - every command in the release notes runs successfully as written (pull, `cosign verify` on the index and on each per-arch digest, `gh attestation verify`)
   - package page shows the description
-  - cleanup logs show legacy versions deleted and `alpine3@sha256:9eee99e…` kept while still pinned
+  - cleanup logs show legacy versions deleted, including `alpine3@sha256:9eee99e…`
+  - Renovate opens the PR moving `ninjam`/`snapcast` to the new `alpine3` digest; tell the owner it needs approving (their 1.0.1 releases follow)
 - [ ] **Step 4:** Report results to the owner, including anything that didn't match.
