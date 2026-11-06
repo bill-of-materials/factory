@@ -2,16 +2,29 @@ name: validate
 
 on:
   pull_request:
-  push:
-    branches:
-      - main
 
 permissions:
   contents: read
 
+env:
+  # renovate: datasource=github-releases depName=GoogleContainerTools/container-structure-test
+  CST_VERSION: v1.22.1
+
 jobs:
+  ci-tests:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Unit tests
+        run: (cd .github/scripts && python3 -m unittest discover -s tests -t . -v)
+
+      - name: Lint workflows
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
+
   discover:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       matrix: ${{ steps.images.outputs.matrix }}
       has_images: ${{ steps.images.outputs.has_images }}
@@ -20,68 +33,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
+
       - id: images
-        shell: bash
         run: |
-          # generate the image list
-          # only rebuild and test modified oci-images
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            BASE_SHA="${{ github.event.pull_request.base.sha }}"
-            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-          else
-            BASE_SHA="${{ github.event.before }}"
-            HEAD_SHA="${{ github.sha }}"
-          fi
-          if [[ -n "$BASE_SHA" ]]; then
-            CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-          else
-            CHANGED=$(git diff-tree --no-commit-id --name-only -r "$HEAD_SHA")
-          fi
-          DIRS=$(
-            printf '%s\n' "${CHANGED:-}" \
-            | awk -F/ 'NF > 1 {print $1}' \
-            | sort -u \
-            | while read -r d; do
-                test -f "$d/Dockerfile" && echo "$d"
-              done || true
-          )
-
-          # Each image dir may declare its target architectures in a
-          # "platforms.txt" file (comma-separated, e.g. "linux/amd64,linux/arm64").
-          # Images without one fall back to DEFAULT_PLATFORMS. Every declared
-          # platform gets its own matrix entry so each arch is actually built
-          # and validated, instead of only the runner's native arch.
-          DEFAULT_PLATFORMS="linux/amd64,linux/arm64,linux/arm/v7"
-
-          MATRIX="[]"
-          while read -r d; do
-            [[ -z "$d" ]] && continue
-            PLATFORMS_FILE="$d/platforms.txt"
-            if [[ -f "$PLATFORMS_FILE" ]]; then
-              PLATFORMS=$(tr -d '[:space:]' < "$PLATFORMS_FILE")
-            else
-              PLATFORMS="$DEFAULT_PLATFORMS"
-            fi
-            ENTRIES=$(
-              printf '%s' "$PLATFORMS" \
-              | jq -R -c --arg img "$d" \
-                  'split(",") | map(select(length > 0)) | map({image: $img, platform: .})'
-            )
-            MATRIX=$(jq -c -n --argjson a "$MATRIX" --argjson b "$ENTRIES" '$a + $b')
-          done <<< "$DIRS"
-
-          if [[ "$MATRIX" == "[]" ]]; then
-            echo 'matrix=[{"image":"__none__","platform":"__none__"}]' >> "$GITHUB_OUTPUT"
-            echo 'has_images=false' >> "$GITHUB_OUTPUT"
-          else
-            echo "matrix=$MATRIX" >> "$GITHUB_OUTPUT"
-            echo 'has_images=true' >> "$GITHUB_OUTPUT"
-          fi
-          echo "Matrix: $MATRIX"
+          python3 .github/scripts/ci.py pr-matrix \
+            --base ${{ github.event.pull_request.base.sha }} \
+            --head ${{ github.event.pull_request.head.sha }} >> "$GITHUB_OUTPUT"
 
   structure-test:
+    name: structure-test (${{ matrix.image }}, ${{ matrix.platform }})
     needs: discover
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
@@ -92,11 +54,11 @@ jobs:
         if: matrix.image == '__none__'
         run: echo "Nothing to validate"
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # 7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: matrix.image != '__none__'
 
       - name: Set up QEMU
-        if: matrix.image != '__none__'
+        if: matrix.image != '__none__' && matrix.qemu
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
 
       - name: Set up Buildx
@@ -106,54 +68,55 @@ jobs:
       - name: Build image (${{ matrix.platform }})
         if: matrix.image != '__none__'
         run: |
-          test -n "${{ matrix.image }}"
-          IMAGE_NAME=$(basename "${{ matrix.image }}")
           docker buildx build \
             --platform "${{ matrix.platform }}" \
             --load \
-            -t local/${IMAGE_NAME}:test \
+            -t "local/${{ matrix.image }}:test" \
             "${{ matrix.image }}"
 
       - name: Install Container Structure Test
         if: matrix.image != '__none__'
         run: |
-          VERSION=1.22.1
           curl -fsSL \
             -o container-structure-test \
-            https://github.com/GoogleContainerTools/container-structure-test/releases/download/v${VERSION}/container-structure-test-linux-amd64
+            "https://github.com/GoogleContainerTools/container-structure-test/releases/download/${CST_VERSION}/container-structure-test-linux-${{ matrix.cst_arch }}"
           chmod +x container-structure-test
           sudo mv container-structure-test /usr/local/bin/
 
       - name: Run Container Structure Test (${{ matrix.platform }})
         if: matrix.image != '__none__'
         run: |
-          IMAGE_NAME=$(basename "${{ matrix.image }}")
           container-structure-test test \
-            --image local/${IMAGE_NAME}:test \
-            --config ${{ matrix.image }}/structure-test.yaml
+            --platform "${{ matrix.platform }}" \
+            --image "local/${{ matrix.image }}:test" \
+            --config "${{ matrix.image }}/structure-test.yaml"
 
   validation-required:
     needs:
+      - ci-tests
       - discover
       - structure-test
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     if: ${{ always() }}
 
     steps:
       - name: Check validation results
         shell: bash
         run: |
+          echo "ci-tests:       ${{ needs.ci-tests.result }}"
           echo "discover:       ${{ needs.discover.result }}"
           echo "structure-test: ${{ needs.structure-test.result }}"
 
-          if [[ "${{ needs.discover.result }}" != "success" ]]; then
-            echo "ERROR: discover did not succeed"
-            exit 1
-          fi
-
-          if [[ "${{ needs.structure-test.result }}" != "success" ]]; then
-            echo "ERROR: structure-test did not succeed"
-            exit 1
-          fi
+          for job in ci-tests discover structure-test; do
+            case "$job" in
+              ci-tests) result="${{ needs.ci-tests.result }}" ;;
+              discover) result="${{ needs.discover.result }}" ;;
+              structure-test) result="${{ needs.structure-test.result }}" ;;
+            esac
+            if [[ "$result" != "success" ]]; then
+              echo "ERROR: $job did not succeed"
+              exit 1
+            fi
+          done
 
           echo "All validation checks passed."
