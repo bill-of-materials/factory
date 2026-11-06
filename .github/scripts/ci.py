@@ -7,7 +7,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from factory_ci import images  # noqa: E402
+from factory_ci import description, images  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -25,6 +25,11 @@ def cmd_pr_matrix(args) -> int:
     return 0
 
 
+def cmd_description(args) -> int:
+    print(description.package_description(args.root, args.image))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="ci.py")
     parser.add_argument("--root", type=Path, default=REPO_ROOT, help=argparse.SUPPRESS)
@@ -34,6 +39,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--base", required=True)
     p.add_argument("--head", required=True)
     p.set_defaults(func=cmd_pr_matrix)
+
+    p = sub.add_parser("description", help="print the package description for an image")
+    p.add_argument("--image", required=True)
+    p.set_defaults(func=cmd_description)
     return parser
 
 

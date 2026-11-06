@@ -1,6 +1,7 @@
 FROM docker.io/library/alpine:3@sha256:294b683cb724975bec92580e1e685676bd4b50bda910ddb8c51d4cabeaec77e6
 
 LABEL org.opencontainers.image.title="alpine3"
+LABEL org.opencontainers.image.description="Hardened Alpine 3 base image with a non-root app user, dumb-init, curl and CA certificates."
 LABEL org.opencontainers.image.base.name="alpine:3"
 
 ARG IMAGE_SOURCE
