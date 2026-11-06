@@ -51,6 +51,11 @@ class ReleasePlanTest(unittest.TestCase):
         self.assertIn("already published", str(cm.exception))
         self.assertIn("alpine3:1.0.0", str(cm.exception))
 
+    def test_fails_when_published_without_revision(self):
+        with self.assertRaises(RuntimeError) as cm:
+            ci.release_plan(self.root, self.head, lambda ref: "<unknown>")
+        self.assertIn("already published", str(cm.exception))
+
     def test_images_without_changes_excluded(self):
         plans = ci.release_plan(self.root, self.head, lambda ref: None)
         self.assertNotIn("ninjam", [p["image"] for p in plans])
@@ -82,9 +87,9 @@ class IndexRevisionTest(unittest.TestCase):
         with self._run(0, out):
             self.assertEqual(registry.index_revision("r/x:1.0.0"), "abc")
 
-    def test_missing_annotation_is_none(self):
+    def test_missing_annotation_is_unknown(self):
         with self._run(0, "{}"):
-            self.assertIsNone(registry.index_revision("r/x:1.0.0"))
+            self.assertEqual(registry.index_revision("r/x:1.0.0"), "<unknown>")
 
     def test_absent_classification(self):
         for err in ("Error: MANIFEST_UNKNOWN: manifest unknown", "NAME_UNKNOWN: repo",
