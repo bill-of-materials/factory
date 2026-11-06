@@ -57,6 +57,10 @@ class CleanupCliTest(unittest.TestCase):
         self.assertIn("DRY-RUN would delete 1 ", out)
         self.assertIn("DRY-RUN would delete 2 ", out)
         self.assertIn("kept 10", out)
+        lines = out.splitlines()
+        kept = [line for line in lines if line.startswith("keeping ")]
+        self.assertEqual(sorted(kept), sorted(f"keeping {digest(i)} 1.0.{i}" for i in range(3, 13)))
+        self.assertLess(lines.index(next(l for l in lines if "kept 10" in l)), lines.index(kept[0]))
 
     def test_cleanup_cli_real_run_deletes_selected_and_marks_releases(self):
         code, out, _, _, dv, mr = self.run_cli()
