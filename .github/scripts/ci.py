@@ -22,11 +22,12 @@ RELEASE_NONE_ENTRY = {**NONE_ENTRY, "version": "__none__"}
 
 
 def release_plan(root: Path, head_sha: str,
-                 revision_lookup: Callable[[str], str | None]) -> tuple[list[dict], list[dict]]:
+                 revision_lookup: Callable[..., str | None]) -> tuple[list[dict], list[dict]]:
     """Plan releases for images with changes.
 
     A version already published from head_sha or one of its ancestors is resumed from that
     revision. Any other published revision is an error for that image only.
+    revision_lookup(ref, never_released=...) returns the published revision or None.
     Returns (plans, errors).
     """
     plans, errors = [], []
@@ -34,7 +35,8 @@ def release_plan(root: Path, head_sha: str,
         plan = versioning.next_version(root, image, head_sha)
         if plan is None:
             continue
-        published = revision_lookup(f"{registry.REGISTRY}/{image}:{plan.version}")
+        published = revision_lookup(f"{registry.REGISTRY}/{image}:{plan.version}",
+                                    never_released=plan.previous_version is None)
         if published is None:
             mode, sha = "build", head_sha
         elif published == head_sha or (
