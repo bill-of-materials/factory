@@ -274,7 +274,7 @@ jobs:
             "${sources[@]}" > index.json
           cat index.json
 
-          oras manifest push --media-type application/vnd.oci.image.index.v1+json "$ref" index.json
+          oras manifest push --media-type "$(jq -r .mediaType index.json)" "$ref" index.json
           digest="sha256:$(sha256sum index.json | cut -d' ' -f1)"
           pushed=$(crane digest "$ref@$digest")
           if [[ "$pushed" != "$digest" ]]; then
