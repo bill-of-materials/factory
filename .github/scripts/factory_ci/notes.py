@@ -62,6 +62,8 @@ def render_release_notes(ctx: ReleaseContext) -> str:
     for platform, _ in ctx.platforms:
         if platform in ctx.sbom_urls:
             lines.append(f"- SBOM attestation ({platform}): {ctx.sbom_urls[platform]}")
+    if not ctx.provenance_url and not ctx.sbom_urls:
+        lines.append(f"- Attestations: {ctx.server_url}/{ctx.repo}/attestations")
     lines += [
         "- SBOM files (SPDX JSON, one per architecture): attached to this release",
         "- Signed with cosign (keyless, GitHub OIDC), index and every architecture",

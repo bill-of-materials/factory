@@ -76,6 +76,7 @@ class RenderTest(unittest.TestCase):
         self.assertNotIn("None", text)
         self.assertNotIn("Provenance attestation", text)
         self.assertNotIn("SBOM attestation", text)
+        self.assertIn("Attestations: https://github.com/bill-of-materials/factory/attestations", text)
 
 
 def statement(predicate_type, predicate):
@@ -84,35 +85,24 @@ def statement(predicate_type, predicate):
 
 
 class FetchAttestationsTest(unittest.TestCase):
-    def fake_run(self, bundles, api_stdout):
+    def fetch(self, bundles):
         def run(cmd, **kwargs):
-            if cmd[:3] == ["gh", "attestation", "download"]:
-                (Path(kwargs["cwd"]) / "sha256-x.jsonl").write_text(
-                    "\n".join(json.dumps(b) for b in bundles) + "\n")
-                return subprocess.CompletedProcess(cmd, 0, "", "")
-            self.assertEqual(cmd[:2], ["gh", "api"])
-            return subprocess.CompletedProcess(cmd, 0, api_stdout, "")
-        return run
+            self.assertEqual(cmd[:3], ["gh", "attestation", "download"])
+            (Path(kwargs["cwd"]) / "sha256-x.jsonl").write_text(
+                "\n".join(json.dumps(b) for b in bundles) + "\n")
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        with mock.patch.object(registry.subprocess, "run", run):
+            return registry.fetch_attestations("bill-of-materials/factory", "r/x", AMD)
 
     def test_decode_attestation_payload(self):
-        bundles = [statement(notes.PROVENANCE_TYPE, {"buildType": "x"}),
-                   statement("https://spdx.dev/Document/v2.3", {"spdxVersion": "SPDX-2.3"})]
-        api = json.dumps({"attestations": [{"id": 11}, {"id": 12}]})
-        with mock.patch.object(registry.subprocess, "run", self.fake_run(bundles, api)):
-            result = registry.fetch_attestations(
-                "bill-of-materials/factory", "ghcr.io/bill-of-materials/ninjam", AMD)
-        self.assertEqual([a.id for a in result], [11, 12])
+        result = self.fetch([statement(notes.PROVENANCE_TYPE, {"buildType": "x"}),
+                             statement("https://spdx.dev/Document/v2.3", {"spdxVersion": "SPDX-2.3"})])
         self.assertEqual(result[0].predicate_type, notes.PROVENANCE_TYPE)
         self.assertEqual(result[1].predicate, {"spdxVersion": "SPDX-2.3"})
-        self.assertEqual(result[0].url, "https://github.com/bill-of-materials/factory/attestations/11")
 
-    def test_id_none_when_counts_differ(self):
-        bundles = [statement(notes.PROVENANCE_TYPE, {})]
-        api = json.dumps({"attestations": []})
-        with mock.patch.object(registry.subprocess, "run", self.fake_run(bundles, api)):
-            result = registry.fetch_attestations("bill-of-materials/factory", "r/x", AMD)
-        self.assertIsNone(result[0].id)
-        self.assertIsNone(result[0].url)
+    def test_decode_wrapped_bundle(self):
+        result = self.fetch([{"bundle": statement(notes.PROVENANCE_TYPE, {"a": 1})}])
+        self.assertEqual(result[0].predicate, {"a": 1})
 
 
 class PlatformDigestsTest(unittest.TestCase):
@@ -130,28 +120,40 @@ class PlatformDigestsTest(unittest.TestCase):
 
 
 class CliTest(unittest.TestCase):
-    def test_release_notes_command_writes_notes_and_sboms(self):
-        sbom = registry.Attestation(2, "https://spdx.dev/Document/v2.3", {"spdxVersion": "SPDX-2.3"})
-        prov = registry.Attestation(1, notes.PROVENANCE_TYPE, {})
-
-        def fetch(repo, ref, digest):
-            return [prov] if digest == INDEX else [sbom]
-
-        with tempfile.TemporaryDirectory() as tmp, \
-                mock.patch.object(registry, "digest_of", return_value=INDEX), \
+    def run_cli(self, *extra):
+        sbom = registry.Attestation("https://spdx.dev/Document/v2.3", {"spdxVersion": "SPDX-2.3"})
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.out = Path(self.tmp.name) / "notes.md"
+        self.sboms = Path(self.tmp.name) / "sbom"
+        with mock.patch.object(registry, "digest_of", return_value=INDEX), \
                 mock.patch.object(registry, "platform_digests", return_value=[("linux/arm/v7", ARM)]), \
-                mock.patch.object(registry, "fetch_attestations", side_effect=fetch), \
+                mock.patch.object(registry, "fetch_attestations", return_value=[sbom]), \
                 mock.patch.object(ci.versioning, "latest_tag", return_value="ninjam/v1.4.1"), \
                 mock.patch.object(ci.versioning, "commits_since", return_value=[Commit(SHA, "fix: x", "")]):
-            out = Path(tmp) / "notes.md"
-            sboms = Path(tmp) / "sbom"
             rc = ci.main(["release-notes", "--image", "ninjam", "--version", "1.4.2", "--sha", SHA,
-                          "--run-id", "9", "--out", str(out), "--sbom-dir", str(sboms)])
-            self.assertEqual(rc, 0)
-            self.assertIn("Changes since 1.4.1", out.read_text())
-            self.assertEqual(
-                json.loads((sboms / "ninjam-1.4.2-linux-arm-v7.spdx.json").read_text()),
-                {"spdxVersion": "SPDX-2.3"})
+                          "--run-id", "9", "--out", str(self.out), "--sbom-dir", str(self.sboms), *extra])
+        self.assertEqual(rc, 0)
+        return self.out.read_text()
+
+    def test_writes_notes_and_sboms(self):
+        text = self.run_cli()
+        self.assertIn("Changes since 1.4.1", text)
+        self.assertEqual(
+            json.loads((self.sboms / "ninjam-1.4.2-linux-arm-v7.spdx.json").read_text()),
+            {"spdxVersion": "SPDX-2.3"})
+
+    def test_attestation_url_flags_appear_in_notes(self):
+        text = self.run_cli("--provenance-url", "https://github.com/o/r/attestations/1",
+                            "--sbom-url", "linux/arm/v7=https://github.com/o/r/attestations/2")
+        self.assertIn("https://github.com/o/r/attestations/1", text)
+        self.assertIn("https://github.com/o/r/attestations/2", text)
+        self.assertNotIn("None", text)
+
+    def test_no_flags_links_generic_attestations_page(self):
+        text = self.run_cli()
+        self.assertIn("https://github.com/bill-of-materials/factory/attestations", text)
+        self.assertNotIn("None", text)
 
 
 if __name__ == "__main__":
