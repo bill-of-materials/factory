@@ -126,16 +126,20 @@ def cleanup_image(org: str, image: str, repo: str, dry_run: bool) -> None:
         return
     listed = {v.digest for v in versions}
     children: dict[str, list[str]] = {}
+    subjects: dict[str, str] = {}
     pending = [v.digest for v in versions]
     while pending:
         digest = pending.pop()
         if digest in children:
             continue
-        children[digest] = registry.manifest_children(f"{ref}@{digest}")
+        links = registry.manifest_links(f"{ref}@{digest}")
+        children[digest] = links.children
+        if links.subject:
+            subjects[digest] = links.subject
         pending.extend(c for c in children[digest] if c not in listed and c not in children)
 
     now = datetime.now(timezone.utc)
-    selection = cleanup.select(versions, children, now)
+    selection = cleanup.select(versions, children, now, subjects=subjects)
     print(f"{image}: kept {len(selection.keep & listed)}, deleting {len(selection.delete)}")
     prefix = "DRY-RUN would delete" if dry_run else "deleting"
     for v in selection.delete:

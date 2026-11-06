@@ -33,14 +33,15 @@ class CleanupCliTest(unittest.TestCase):
         # 12 releases, one image manifest each (leaf); oldest two get removed
         self.versions = [version(i, i, f"1.0.{i}") for i in range(1, 13)]
 
-    def run_cli(self, *extra, versions=None, children=None, delete_side_effect=None):
-        def manifest_children(ref):
-            if children is not None:
-                return children(ref)
-            return []
+    def run_cli(self, *extra, versions=None, children=None, subjects=None, delete_side_effect=None):
+        def manifest_links(ref):
+            digest_ = ref.split("@")[1]
+            return registry.ManifestLinks(
+                children(ref) if children is not None else [],
+                (subjects or {}).get(digest_))
 
         with mock.patch.object(registry, "list_versions", return_value=versions or self.versions) as lv, \
-                mock.patch.object(registry, "manifest_children", side_effect=manifest_children) as mc, \
+                mock.patch.object(registry, "manifest_links", side_effect=manifest_links) as mc, \
                 mock.patch.object(registry, "delete_version", side_effect=delete_side_effect) as dv, \
                 mock.patch.object(registry, "mark_release_removed") as mr:
             out = io.StringIO()
@@ -85,6 +86,15 @@ class CleanupCliTest(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertIn(child, seen)
 
+    def test_referrer_of_kept_release_is_kept(self):
+        referrer = version(13, 13)  # untagged, subject = newest release
+        orphan = version(14, 14)  # untagged, subject = a removed release
+        subjects = {referrer.digest: digest(12), orphan.digest: digest(1)}
+        code, out, _, _, dv, _ = self.run_cli(versions=[*self.versions, referrer, orphan],
+                                              subjects=subjects)
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(c.args[2] for c in dv.call_args_list), [1, 2, 14])
+
     def test_manifest_error_deletes_nothing_and_exits_1(self):
         def children(ref):
             raise RuntimeError("boom")
@@ -102,11 +112,11 @@ class CleanupCliTest(unittest.TestCase):
         calls = []
         real_select = cleanup.select
 
-        def fake_select(versions, children, now, keep_releases=10):
+        def fake_select(versions, children, now, keep_releases=10, subjects=None):
             calls.append(1)
             if len(calls) == 1:
                 raise cleanup.IncompleteGraph("sha256:x")
-            return real_select(versions, children, now, keep_releases)
+            return real_select(versions, children, now, keep_releases, subjects=subjects)
 
         with mock.patch.object(cleanup, "select", side_effect=fake_select):
             code, _, lv, _, dv, _ = self.run_cli()
@@ -144,15 +154,20 @@ class RegistryIoTest(unittest.TestCase):
         return mock.patch.object(registry, "_crane", return_value=subprocess.CompletedProcess(
             [], returncode, stdout, stderr))
 
-    def test_manifest_children(self):
+    def test_manifest_links(self):
         index = json.dumps({"manifests": [{"digest": "sha256:a"}, {"digest": "sha256:b"}]})
         with self._crane(index):
-            self.assertEqual(registry.manifest_children("r@sha256:x"), ["sha256:a", "sha256:b"])
+            self.assertEqual(registry.manifest_links("r@sha256:x"),
+                             registry.ManifestLinks(["sha256:a", "sha256:b"], None))
         with self._crane(json.dumps({"layers": []})):
-            self.assertEqual(registry.manifest_children("r@sha256:x"), [])
+            self.assertEqual(registry.manifest_links("r@sha256:x"), registry.ManifestLinks([], None))
+        referrer = json.dumps({"layers": [], "subject": {"digest": "sha256:s"}})
+        with self._crane(referrer):
+            self.assertEqual(registry.manifest_links("r@sha256:x"),
+                             registry.ManifestLinks([], "sha256:s"))
         with self._crane(returncode=1, stderr="denied"):
             with self.assertRaises(RuntimeError):
-                registry.manifest_children("r@sha256:x")
+                registry.manifest_links("r@sha256:x")
 
     def test_delete_version(self):
         with mock.patch.object(registry, "_gh") as gh:

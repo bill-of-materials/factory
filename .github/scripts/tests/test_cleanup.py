@@ -111,6 +111,20 @@ class SelectTest(unittest.TestCase):
         self.assertEqual({v.id for v in sel.delete}, {1, 3, 4, 6})
         self.assertEqual(sel.removed_releases, ["1.0.0"])
 
+    def test_referrers_follow_their_subject(self):
+        versions = [
+            ver(1, 1, ["1.1.0"]),
+            ver(2, 2, ["1.0.0"]),
+            ver(3, 3),  # untagged referrer of the kept index
+            ver(4, 4),  # untagged referrer of the deleted index
+            ver(5, 5),  # untagged referrer of the kept referrer (fixed point)
+        ]
+        children = {v.digest: [] for v in versions}
+        subjects = {dig(3): dig(1), dig(4): dig(2), dig(5): dig(3)}
+        sel = select(versions, children, NOW, keep_releases=1, subjects=subjects)
+        self.assertEqual(sel.keep, {dig(1), dig(3), dig(5)})
+        self.assertEqual([v.id for v in sel.delete], [2, 4])
+
     def test_legacy_sha_tagged_deleted(self):
         sha = "a" * 40
         versions = [
