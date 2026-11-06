@@ -1,8 +1,9 @@
 import io
+import json
 import subprocess
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from unittest import mock
 
 import ci
@@ -18,46 +19,89 @@ class ReleasePlanTest(unittest.TestCase):
         self.root = self.repo.root
         for image in ("alpine3", "ninjam"):
             self.repo.write(f"{image}/Dockerfile", "FROM scratch\n")
-        self.repo.commit("chore: initial")
+        self.base = self.repo.commit("chore: initial")
         self.repo.tag("ninjam/v1.0.0")  # released, no changes since
         self.repo.write("alpine3/Dockerfile", "FROM scratch\n# change\n")
         self.head = self.repo.commit("feat(alpine3): change", "alpine3/Dockerfile")
 
+    def plan(self, lookup):
+        plans, errors = ci.release_plan(self.root, self.head, lookup)
+        return plans, errors
+
     def test_build_when_version_absent(self):
-        plans = ci.release_plan(self.root, self.head, lambda ref: None)
+        plans, errors = self.plan(lambda ref: None)
+        self.assertEqual(errors, [])
         self.assertEqual(len(plans), 1)
         self.assertEqual(plans[0]["image"], "alpine3")
         self.assertEqual(plans[0]["version"], "1.0.0")
         self.assertEqual(plans[0]["previous_version"], None)
         self.assertEqual(plans[0]["bump"], "initial")
         self.assertEqual(plans[0]["mode"], "build")
+        self.assertEqual(plans[0]["sha"], self.head)
 
     def test_lookup_uses_registry_ref(self):
         refs = []
-        ci.release_plan(self.root, self.head, lambda ref: refs.append(ref))
+        self.plan(lambda ref: refs.append(ref))
         self.assertEqual(refs, ["ghcr.io/bill-of-materials/alpine3:1.0.0"])
 
     def test_resume_when_same_revision(self):
-        plans = ci.release_plan(self.root, self.head, lambda ref: self.head)
+        plans, errors = self.plan(lambda ref: self.head)
+        self.assertEqual(errors, [])
         self.assertEqual(plans[0]["mode"], "resume")
+        self.assertEqual(plans[0]["sha"], self.head)
         out = self._cli(lambda ref: self.head)
         self.assertIn("matrix=" + ci.json.dumps([ci.RELEASE_NONE_ENTRY], separators=(",", ":")), out)
         self.assertIn("has_builds=false", out)
         self.assertIn("has_releases=true", out)
+        self.assertIn("errors=[]", out)
 
-    def test_fails_when_other_revision(self):
-        with self.assertRaises(RuntimeError) as cm:
-            ci.release_plan(self.root, self.head, lambda ref: "deadbeef")
-        self.assertIn("already published", str(cm.exception))
-        self.assertIn("alpine3:1.0.0", str(cm.exception))
+    def test_resume_from_ancestor_revision(self):
+        # partial publish from an earlier commit, then a new commit landed
+        plans, errors = self.plan(lambda ref: self.base)
+        self.assertEqual(errors, [])
+        self.assertEqual(plans[0]["mode"], "resume")
+        self.assertEqual(plans[0]["sha"], self.base)
 
-    def test_fails_when_published_without_revision(self):
-        with self.assertRaises(RuntimeError) as cm:
-            ci.release_plan(self.root, self.head, lambda ref: "<unknown>")
-        self.assertIn("already published", str(cm.exception))
+    def _change_ninjam(self):
+        self.repo.write("ninjam/Dockerfile", "FROM scratch\n# fix\n")
+        self.head = self.repo.commit("fix(ninjam): change", "ninjam/Dockerfile")
+
+    def test_non_ancestor_revision_fails_only_that_image(self):
+        self.repo.checkout("side", create=True)
+        side = self.repo.commit("chore: elsewhere")
+        self.repo.checkout("main")
+        self._change_ninjam()
+
+        def lookup(ref):
+            return side if "/alpine3:" in ref else None
+
+        plans, errors = self.plan(lookup)
+        self.assertEqual([(p["image"], p["mode"]) for p in plans], [("ninjam", "build")])
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0]["image"], "alpine3")
+        self.assertEqual(errors[0]["version"], "1.0.0")
+        self.assertIn(side, errors[0]["error"])
+
+    def test_unknown_or_missing_commit_revision_is_error(self):
+        for published in ("<unknown>", "deadbeef" * 5):
+            plans, errors = self.plan(lambda ref: published)
+            self.assertEqual(plans, [])
+            self.assertEqual([e["image"] for e in errors], ["alpine3"])
+            self.assertIn("already published", errors[0]["error"])
+
+    def test_cli_reports_errors_and_still_plans_healthy_images(self):
+        self._change_ninjam()
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            out = self._cli(lambda ref: "<unknown>" if "/alpine3:" in ref else None)
+        self.assertIn("has_releases=true", out)
+        self.assertIn('"image":"ninjam"', out)
+        errors_line = next(line for line in out.splitlines() if line.startswith("errors="))
+        self.assertEqual([e["image"] for e in json.loads(errors_line[len("errors="):])], ["alpine3"])
+        self.assertIn("::error::alpine3", stderr.getvalue())
 
     def test_images_without_changes_excluded(self):
-        plans = ci.release_plan(self.root, self.head, lambda ref: None)
+        plans, _ = self.plan(lambda ref: None)
         self.assertNotIn("ninjam", [p["image"] for p in plans])
 
     def test_cli_build_matrix_has_version(self):

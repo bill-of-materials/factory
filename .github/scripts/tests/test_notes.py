@@ -126,8 +126,8 @@ class CliTest(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.out = Path(self.tmp.name) / "notes.md"
         self.sboms = Path(self.tmp.name) / "sbom"
-        with mock.patch.object(registry, "digest_of", return_value=INDEX), \
-                mock.patch.object(registry, "platform_digests", return_value=[("linux/arm/v7", ARM)]), \
+        with mock.patch.object(registry, "digest_of", return_value=INDEX) as self.digest_of, \
+                mock.patch.object(registry, "platform_digests", return_value=[("linux/arm/v7", ARM)]) as self.platform_digests, \
                 mock.patch.object(registry, "fetch_attestations", return_value=[sbom]), \
                 mock.patch.object(ci.versioning, "latest_tag", return_value="ninjam/v1.4.1"), \
                 mock.patch.object(ci.versioning, "commits_since", return_value=[Commit(SHA, "fix: x", "")]):
@@ -154,6 +154,17 @@ class CliTest(unittest.TestCase):
         text = self.run_cli()
         self.assertIn("https://github.com/bill-of-materials/factory/attestations", text)
         self.assertNotIn("None", text)
+
+    def test_explicit_digest_skips_tag_lookup(self):
+        other = "sha256:" + "9" * 64
+        text = self.run_cli("--digest", other)
+        self.digest_of.assert_not_called()
+        self.platform_digests.assert_called_once_with(f"ghcr.io/bill-of-materials/ninjam@{other}")
+        self.assertIn(other, text)
+
+    def test_tag_lookup_without_explicit_digest(self):
+        self.run_cli()
+        self.digest_of.assert_called_once_with("ghcr.io/bill-of-materials/ninjam:1.4.2")
 
 
 if __name__ == "__main__":

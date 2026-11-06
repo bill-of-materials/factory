@@ -58,6 +58,14 @@ def latest_tag(root: Path, image: str) -> str | None:
     return max(found)[1] if found else None
 
 
+def is_ancestor(root: Path, rev: str, head: str) -> bool:
+    """True when rev is a commit reachable from head; False for unrelated or unknown revisions."""
+    result = subprocess.run(
+        ["git", "merge-base", "--is-ancestor", rev, head], cwd=root, capture_output=True, text=True,
+    )
+    return result.returncode == 0
+
+
 def commits_since(root: Path, image: str, tag: str | None, head: str = "HEAD") -> list[Commit]:
     rev = f"refs/tags/{tag}..{head}" if tag else head
     out = _git(

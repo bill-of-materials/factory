@@ -30,6 +30,7 @@ jobs:
       matrix: ${{ steps.plan.outputs.matrix }}
       has_builds: ${{ steps.plan.outputs.has_builds }}
       has_releases: ${{ steps.plan.outputs.has_releases }}
+      errors: ${{ steps.plan.outputs.errors }}
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -51,10 +52,20 @@ jobs:
           HEAD_SHA: ${{ github.sha }}
         run: python3 .github/scripts/ci.py release-plan --head-sha "$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
+      # Healthy images still build and publish (their jobs only need the outputs above);
+      # the run is marked failed for the images that cannot be released.
+      - name: Fail on images that cannot be released
+        if: steps.plan.outputs.errors != '[]'
+        env:
+          ERRORS: ${{ steps.plan.outputs.errors }}
+        run: |
+          jq -r '.[] | "::error::\(.image): \(.error)"' <<< "$ERRORS"
+          exit 1
+
   build:
     name: build (${{ matrix.image }}, ${{ matrix.platform }})
     needs: plan
-    if: needs.plan.outputs.has_builds == 'true'
+    if: ${{ !cancelled() && needs.plan.outputs.has_builds == 'true' }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
@@ -179,7 +190,7 @@ jobs:
     needs:
       - plan
       - build
-    if: ${{ !cancelled() && needs.plan.result == 'success' && needs.plan.outputs.has_releases == 'true' }}
+    if: ${{ !cancelled() && needs.plan.outputs.has_releases == 'true' }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -241,7 +252,7 @@ jobs:
         env:
           IMAGE: ${{ matrix.image }}
           VERSION: ${{ matrix.version }}
-          HEAD_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ matrix.sha }}
           SOURCE: ${{ github.server_url }}/${{ github.repository }}
         run: |
           ref="$REGISTRY/$IMAGE"
@@ -290,6 +301,35 @@ jobs:
           subject-digest: ${{ steps.index.outputs.digest }}
           push-to-registry: false
 
+      - name: Render release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ matrix.version }}
+          MODE: ${{ matrix.mode }}
+          SHA: ${{ matrix.sha }}
+          RUN_ID: ${{ github.run_id }}
+          DIGEST: ${{ steps.index.outputs.digest }}
+          PROVENANCE_URL: ${{ steps.provenance.outputs.attestation-url }}
+        run: |
+          links=()
+          if [[ "$MODE" == "build" ]]; then
+            # The index is not tagged yet: name it by digest.
+            links+=(--digest "$DIGEST" --provenance-url "$PROVENANCE_URL")
+            while read -r platform _digest url; do
+              links+=(--sbom-url "$platform=$url")
+            done < <(cat digests/*.txt)
+          fi
+          python3 .github/scripts/ci.py release-notes \
+            --image "$IMAGE" \
+            --version "$VERSION" \
+            --sha "$SHA" \
+            --run-id "$RUN_ID" \
+            --out notes.md \
+            --sbom-dir sboms \
+            "${links[@]}"
+          cat notes.md
+
       - name: Tag index
         if: matrix.mode == 'build'
         env:
@@ -298,44 +338,17 @@ jobs:
           DIGEST: ${{ steps.index.outputs.digest }}
         run: oras tag "$REGISTRY/$IMAGE@$DIGEST" "$VERSION" "${VERSION%.*}" "${VERSION%%.*}" latest
 
-      - name: Render release notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-          IMAGE: ${{ matrix.image }}
-          VERSION: ${{ matrix.version }}
-          MODE: ${{ matrix.mode }}
-          HEAD_SHA: ${{ github.sha }}
-          RUN_ID: ${{ github.run_id }}
-          PROVENANCE_URL: ${{ steps.provenance.outputs.attestation-url }}
-        run: |
-          links=()
-          if [[ "$MODE" == "build" ]]; then
-            links+=(--provenance-url "$PROVENANCE_URL")
-            while read -r platform _digest url; do
-              links+=(--sbom-url "$platform=$url")
-            done < <(cat digests/*.txt)
-          fi
-          python3 .github/scripts/ci.py release-notes \
-            --image "$IMAGE" \
-            --version "$VERSION" \
-            --sha "$HEAD_SHA" \
-            --run-id "$RUN_ID" \
-            --out notes.md \
-            --sbom-dir sboms \
-            "${links[@]}"
-          cat notes.md
-
       - name: Create git tag and GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           IMAGE: ${{ matrix.image }}
           VERSION: ${{ matrix.version }}
-          HEAD_SHA: ${{ github.sha }}
+          SHA: ${{ matrix.sha }}
         run: |
           shopt -s nullglob
           sboms=(sboms/*)
           gh release create "$IMAGE/v$VERSION" \
-            --target "$HEAD_SHA" \
+            --target "$SHA" \
             --title "$IMAGE $VERSION" \
             --notes-file notes.md \
             --latest=false \
