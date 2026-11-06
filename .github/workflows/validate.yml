@@ -21,7 +21,7 @@ jobs:
         run: (cd .github/scripts && python3 -m unittest discover -s tests -t . -v)
 
       - name: Lint workflows
-        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7 -color
+        run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.7@sha256:887a259a5a534f3c4f36cb02dca341673c6089431057242cdc931e9f133147e9 -color
 
   discover:
     runs-on: ubuntu-24.04
@@ -67,29 +67,37 @@ jobs:
 
       - name: Build image (${{ matrix.platform }})
         if: matrix.image != '__none__'
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          IMAGE: ${{ matrix.image }}
         run: |
           docker buildx build \
-            --platform "${{ matrix.platform }}" \
+            --platform "$PLATFORM" \
             --load \
-            -t "local/${{ matrix.image }}:test" \
-            "${{ matrix.image }}"
+            -t "local/$IMAGE:test" \
+            "$IMAGE"
 
       - name: Install Container Structure Test
         if: matrix.image != '__none__'
+        env:
+          CST_ARCH: ${{ matrix.cst_arch }}
         run: |
           curl -fsSL \
             -o container-structure-test \
-            "https://github.com/GoogleContainerTools/container-structure-test/releases/download/${CST_VERSION}/container-structure-test-linux-${{ matrix.cst_arch }}"
+            "https://github.com/GoogleContainerTools/container-structure-test/releases/download/${CST_VERSION}/container-structure-test-linux-${CST_ARCH}"
           chmod +x container-structure-test
           sudo mv container-structure-test /usr/local/bin/
 
       - name: Run Container Structure Test (${{ matrix.platform }})
         if: matrix.image != '__none__'
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          IMAGE: ${{ matrix.image }}
         run: |
           container-structure-test test \
-            --platform "${{ matrix.platform }}" \
-            --image "local/${{ matrix.image }}:test" \
-            --config "${{ matrix.image }}/structure-test.yaml"
+            --platform "$PLATFORM" \
+            --image "local/$IMAGE:test" \
+            --config "$IMAGE/structure-test.yaml"
 
   validation-required:
     needs:
