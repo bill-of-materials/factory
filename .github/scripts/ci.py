@@ -4,10 +4,11 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from factory_ci import description, images  # noqa: E402
+from factory_ci import description, images, registry, versioning  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -15,6 +16,29 @@ NONE_ENTRY = {
     "image": "__none__", "platform": "__none__", "slug": "none",
     "runner": "ubuntu-24.04", "qemu": False, "cst_arch": "amd64",
 }
+RELEASE_NONE_ENTRY = {**NONE_ENTRY, "version": "__none__"}
+
+
+def release_plan(root: Path, head_sha: str,
+                 revision_lookup: Callable[[str], str | None]) -> list[dict]:
+    """Plan releases for images with changes; resume what is already published from head_sha."""
+    plans = []
+    for image in images.list_images(root):
+        plan = versioning.next_version(root, image, head_sha)
+        if plan is None:
+            continue
+        published = revision_lookup(f"{registry.REGISTRY}/{image}:{plan.version}")
+        if published is None:
+            mode = "build"
+        elif published == head_sha:
+            mode = "resume"
+        else:
+            raise RuntimeError(f"{image}:{plan.version} already published from {published}")
+        plans.append({
+            "image": image, "version": plan.version,
+            "previous_version": plan.previous_version, "bump": plan.bump, "mode": mode,
+        })
+    return plans
 
 
 def cmd_pr_matrix(args) -> int:
@@ -22,6 +46,18 @@ def cmd_pr_matrix(args) -> int:
     matrix = images.build_matrix(args.root, changed)
     print(f"matrix={json.dumps(matrix or [NONE_ENTRY], separators=(',', ':'))}")
     print(f"has_images={'true' if matrix else 'false'}")
+    return 0
+
+
+def cmd_release_plan(args) -> int:
+    plans = release_plan(args.root, args.head_sha, registry.index_revision)
+    versions = {p["image"]: p["version"] for p in plans if p["mode"] == "build"}
+    matrix = [{**entry, "version": versions[entry["image"]]}
+              for entry in images.build_matrix(args.root, list(versions))]
+    print(f"plans={json.dumps(plans, separators=(',', ':'))}")
+    print(f"matrix={json.dumps(matrix or [RELEASE_NONE_ENTRY], separators=(',', ':'))}")
+    print(f"has_builds={'true' if matrix else 'false'}")
+    print(f"has_releases={'true' if plans else 'false'}")
     return 0
 
 
@@ -39,6 +75,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--base", required=True)
     p.add_argument("--head", required=True)
     p.set_defaults(func=cmd_pr_matrix)
+
+    p = sub.add_parser("release-plan", help="plan releases and detect resumable ones")
+    p.add_argument("--head-sha", required=True)
+    p.set_defaults(func=cmd_release_plan)
 
     p = sub.add_parser("description", help="print the package description for an image")
     p.add_argument("--image", required=True)
