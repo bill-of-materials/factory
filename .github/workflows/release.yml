@@ -1,134 +1,78 @@
 name: release
 
 on:
-  workflow_run:
-    workflows:
-      - validate
-    types:
-      - completed
-
-permissions:
-  contents: read
-  packages: write
-  id-token: write
+  push:
+    branches:
+      - main
+  workflow_dispatch:
 
 concurrency:
   group: release-main
   cancel-in-progress: false
 
-jobs:
-  verify-trigger:
-    runs-on: ubuntu-latest
-    outputs:
-      proceed: ${{ steps.check.outputs.proceed }}
-    steps:
-      - id: check
-        shell: bash
-        run: |
-          if [[ "${{ github.event.workflow_run.conclusion }}" != "success" ]]; then
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          if [[ "${{ github.event.workflow_run.head_branch }}" != "main" ]]; then
-            echo "proceed=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-          echo "proceed=true" >> "$GITHUB_OUTPUT"
+permissions:
+  contents: read
 
-  discover:
-    needs:
-      - verify-trigger
-    runs-on: ubuntu-latest
+env:
+  # renovate: datasource=github-releases depName=GoogleContainerTools/container-structure-test
+  CST_VERSION: v1.22.1
+  REGISTRY: ghcr.io/bill-of-materials
+
+jobs:
+  plan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: read
     outputs:
-      images: ${{ steps.images.outputs.images }}
-      has_images: ${{ steps.images.outputs.has_images }}
+      plans: ${{ steps.plan.outputs.plans }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      has_builds: ${{ steps.plan.outputs.has_builds }}
+      has_releases: ${{ steps.plan.outputs.has_releases }}
+
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           fetch-depth: 0
-      - id: images
-        shell: bash
-        run: |
-          # generate the image list
-          # only rebuild and test modified oci-images
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            BASE_SHA="${{ github.event.pull_request.base.sha }}"
-            HEAD_SHA="${{ github.event.pull_request.head.sha }}"
-          else
-            BASE_SHA="${{ github.event.before }}"
-            HEAD_SHA="${{ github.sha }}"
-          fi
-          if [[ -n "$BASE_SHA" ]]; then
-            CHANGED=$(git diff --name-only "$BASE_SHA" "$HEAD_SHA")
-          else
-            CHANGED=$(git diff-tree --no-commit-id --name-only -r "$HEAD_SHA")
-          fi
-          DIRS=$(
-            printf '%s\n' "${CHANGED:-}" \
-            | awk -F/ 'NF > 1 {print $1}' \
-            | sort -u \
-            | while read -r d; do
-                test -f "$d/Dockerfile" && echo "$d"
-              done || true
-          )
 
-          # Each image dir may declare its target architectures in a
-          # "platforms.txt" file (comma-separated, e.g. "linux/amd64,linux/arm64").
-          # Images without one fall back to DEFAULT_PLATFORMS.
-          DEFAULT_PLATFORMS="linux/amd64,linux/arm64,linux/arm/v7"
+      - uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
 
-          IMAGES="[]"
-          while read -r d; do
-            [[ -z "$d" ]] && continue
-            PLATFORMS_FILE="$d/platforms.txt"
-            if [[ -f "$PLATFORMS_FILE" ]]; then
-              PLATFORMS=$(tr -d '[:space:]' < "$PLATFORMS_FILE")
-            else
-              PLATFORMS="$DEFAULT_PLATFORMS"
-            fi
-            ENTRY=$(jq -c -n --arg img "$d" --arg platforms "$PLATFORMS" '{image: $img, platforms: $platforms}')
-            IMAGES=$(jq -c -n --argjson a "$IMAGES" --argjson b "$ENTRY" '$a + [$b]')
-          done <<< "$DIRS"
+      - name: Login to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
-          if [[ "$IMAGES" == "[]" ]]; then
-            echo 'images=[{"image":"__none__","platforms":"__none__"}]' >> "$GITHUB_OUTPUT"
-            echo 'has_images=false' >> "$GITHUB_OUTPUT"
-          else
-            echo "images=$IMAGES" >> "$GITHUB_OUTPUT"
-            echo 'has_images=true' >> "$GITHUB_OUTPUT"
-          fi
-          echo "Images: $IMAGES"
+      - name: Plan releases
+        id: plan
+        env:
+          HEAD_SHA: ${{ github.sha }}
+        run: python3 .github/scripts/ci.py release-plan --head-sha "$HEAD_SHA" >> "$GITHUB_OUTPUT"
 
-  build-and-publish:
-    needs:
-      - verify-trigger
-      - discover
-    if: |
-      needs.verify-trigger.outputs.proceed == 'true' &&
-      needs.discover.outputs.has_images == 'true'
+  build:
+    name: build (${{ matrix.image }}, ${{ matrix.platform }})
+    needs: plan
+    if: needs.plan.outputs.has_builds == 'true'
+    runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJson(needs.discover.outputs.images) }}
-
+        include: ${{ fromJson(needs.plan.outputs.matrix) }}
     permissions:
       contents: read
       packages: write
       id-token: write
-
-    runs-on: ubuntu-latest
+      attestations: write
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-
-      - name: Install Cosign
-        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
-      - name: Check Cosign install
-        run: cosign version
+          ref: ${{ github.sha }}
 
       - name: Set up QEMU
+        if: matrix.qemu
         uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4
 
       - name: Set up Buildx
@@ -143,39 +87,268 @@ jobs:
 
       - name: Compute metadata
         id: meta
-        shell: bash
-        run: |
-          IMAGE_NAME=$(basename "${{ matrix.image }}")
-          echo "image_name=${IMAGE_NAME}" >> "$GITHUB_OUTPUT"
-          echo "created=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
-          echo "source=${{ github.server_url }}/${{ github.repository }}" >> "$GITHUB_OUTPUT"
-          echo "revision=${{ github.event.workflow_run.head_sha }}" >> "$GITHUB_OUTPUT"
+        # Commit time, not wall-clock time: identical across platforms and on retry.
+        run: echo "created=$(git log -1 --format=%cI)" >> "$GITHUB_OUTPUT"
 
-      - name: Build and Push
+      - name: Build and push by digest (${{ matrix.platform }})
         id: build
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7
         with:
           context: ${{ matrix.image }}
-          push: true
-          platforms: ${{ matrix.platforms }}
-          provenance: mode=max
-          sbom: true
-          tags: |
-            ghcr.io/${{ github.repository_owner }}/${{ steps.meta.outputs.image_name }}:${{ github.event.workflow_run.head_sha }}
-            ghcr.io/${{ github.repository_owner }}/${{ steps.meta.outputs.image_name }}:latest
+          platforms: ${{ matrix.platform }}
+          provenance: false
+          sbom: false
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ matrix.image }},push-by-digest=true,name-canonical=true,push=true
           labels: |
-            org.opencontainers.image.source=${{ steps.meta.outputs.source }}
-            org.opencontainers.image.revision=${{ steps.meta.outputs.revision }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
             org.opencontainers.image.created=${{ steps.meta.outputs.created }}
+            org.opencontainers.image.version=${{ matrix.version }}
           build-args: |
-            IMAGE_SOURCE=${{ steps.meta.outputs.source }}
-            IMAGE_REVISION=${{ steps.meta.outputs.revision }}
+            IMAGE_SOURCE=${{ github.server_url }}/${{ github.repository }}
+            IMAGE_REVISION=${{ github.sha }}
             IMAGE_CREATED=${{ steps.meta.outputs.created }}
 
-      - name: Sign image
+      - name: Install Container Structure Test
         env:
-          DIGEST: ${{ steps.build.outputs.digest }}
-        shell: bash
+          CST_ARCH: ${{ matrix.cst_arch }}
         run: |
-          cosign sign --yes \
-            ghcr.io/${{ github.repository_owner }}/${{ steps.meta.outputs.image_name }}@${DIGEST}
+          curl -fsSL \
+            -o container-structure-test \
+            "https://github.com/GoogleContainerTools/container-structure-test/releases/download/${CST_VERSION}/container-structure-test-linux-${CST_ARCH}"
+          chmod +x container-structure-test
+          sudo mv container-structure-test /usr/local/bin/
+
+      - name: Test pushed digest (${{ matrix.platform }})
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          IMAGE: ${{ matrix.image }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          docker pull --platform "$PLATFORM" "$REGISTRY/$IMAGE@$DIGEST"
+          container-structure-test test \
+            --platform "$PLATFORM" \
+            --image "$REGISTRY/$IMAGE@$DIGEST" \
+            --config "$IMAGE/structure-test.yaml"
+
+      - name: Generate SBOM
+        uses: anchore/sbom-action@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          image: ${{ env.REGISTRY }}/${{ matrix.image }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+          upload-artifact: false
+
+      - name: Attest SBOM
+        id: attest-sbom
+        uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          sbom-path: sbom.spdx.json
+          push-to-registry: false
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ matrix.image }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: false
+
+      - name: Record digest
+        env:
+          PLATFORM: ${{ matrix.platform }}
+          SLUG: ${{ matrix.slug }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+          SBOM_URL: ${{ steps.attest-sbom.outputs.attestation-url }}
+        run: |
+          mkdir -p digests
+          echo "$PLATFORM $DIGEST $SBOM_URL" > "digests/$SLUG.txt"
+
+      - name: Upload digest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: digest-${{ matrix.image }}-${{ matrix.slug }}
+          path: digests/${{ matrix.slug }}.txt
+          if-no-files-found: error
+          retention-days: 1
+          overwrite: true
+
+  publish:
+    name: publish (${{ matrix.image }} ${{ matrix.version }}, ${{ matrix.mode }})
+    needs:
+      - plan
+      - build
+    if: always() && needs.plan.result == 'success' && needs.plan.outputs.has_releases == 'true'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.plan.outputs.plans) }}
+    permissions:
+      contents: write
+      packages: write
+      id-token: write
+      attestations: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+
+      - uses: imjasonh/setup-crane@feee3b6bb0d4c68370f256a4502498c9227e5c6b # v0.7
+
+      - name: Login to GHCR
+        uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Download digests
+        if: matrix.mode == 'build'
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: digest-${{ matrix.image }}-*
+          path: digests
+          merge-multiple: true
+
+      - name: Check every platform was built and tested
+        if: matrix.mode == 'build'
+        env:
+          IMAGE: ${{ matrix.image }}
+        run: |
+          shopt -s nullglob
+          files=(digests/*.txt)
+          expected=$(python3 -c 'import sys; from pathlib import Path; sys.path.insert(0, ".github/scripts"); from factory_ci.images import read_platforms; print("\n".join(read_platforms(Path("."), sys.argv[1])))' "$IMAGE" | sort)
+          actual=""
+          if (( ${#files[@]} )); then
+            actual=$(cut -d' ' -f1 "${files[@]}" | sort)
+          fi
+          echo "expected platforms:"; echo "$expected"
+          echo "built platforms:"; echo "$actual"
+          if [[ "$expected" != "$actual" ]]; then
+            echo "::error::$IMAGE: not every platform was built and tested; not publishing"
+            exit 1
+          fi
+
+      - uses: oras-project/setup-oras@5e2f2482b30b0cb3e14e67f89a80c88c659a7c63 # v2.0.3
+        if: matrix.mode == 'build'
+
+      - name: Push untagged multi-arch index
+        id: index
+        if: matrix.mode == 'build'
+        env:
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ matrix.version }}
+          HEAD_SHA: ${{ github.sha }}
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          ref="$REGISTRY/$IMAGE"
+          created=$(git log -1 --format=%cI "$HEAD_SHA")
+          description=$(python3 .github/scripts/ci.py description --image "$IMAGE")
+          sources=()
+          while read -r _platform digest _url; do
+            sources+=("$ref@$digest")
+          done < <(cat digests/*.txt)
+
+          docker buildx imagetools create --dry-run \
+            --annotation "index:org.opencontainers.image.description=$description" \
+            --annotation "index:org.opencontainers.image.source=$SOURCE" \
+            --annotation "index:org.opencontainers.image.revision=$HEAD_SHA" \
+            --annotation "index:org.opencontainers.image.version=$VERSION" \
+            --annotation "index:org.opencontainers.image.created=$created" \
+            "${sources[@]}" > index.json
+          cat index.json
+
+          oras manifest push --media-type application/vnd.oci.image.index.v1+json "$ref" index.json
+          digest="sha256:$(sha256sum index.json | cut -d' ' -f1)"
+          pushed=$(crane digest "$ref@$digest")
+          if [[ "$pushed" != "$digest" ]]; then
+            echo "::error::$ref: pushed index digest $pushed does not match $digest"
+            exit 1
+          fi
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+      - name: Install Cosign
+        if: matrix.mode == 'build'
+        uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
+
+      - name: Sign index and platform manifests
+        if: matrix.mode == 'build'
+        env:
+          IMAGE: ${{ matrix.image }}
+          DIGEST: ${{ steps.index.outputs.digest }}
+        run: cosign sign --yes --recursive "$REGISTRY/$IMAGE@$DIGEST"
+
+      - name: Attest index build provenance
+        id: provenance
+        if: matrix.mode == 'build'
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ matrix.image }}
+          subject-digest: ${{ steps.index.outputs.digest }}
+          push-to-registry: false
+
+      - name: Tag index
+        if: matrix.mode == 'build'
+        env:
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ matrix.version }}
+          DIGEST: ${{ steps.index.outputs.digest }}
+        run: oras tag "$REGISTRY/$IMAGE@$DIGEST" "$VERSION" "${VERSION%.*}" "${VERSION%%.*}" latest
+
+      - name: Render release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ matrix.version }}
+          MODE: ${{ matrix.mode }}
+          HEAD_SHA: ${{ github.sha }}
+          RUN_ID: ${{ github.run_id }}
+          PROVENANCE_URL: ${{ steps.provenance.outputs.attestation-url }}
+        run: |
+          links=()
+          if [[ "$MODE" == "build" ]]; then
+            links+=(--provenance-url "$PROVENANCE_URL")
+            while read -r platform _digest url; do
+              links+=(--sbom-url "$platform=$url")
+            done < <(cat digests/*.txt)
+          fi
+          python3 .github/scripts/ci.py release-notes \
+            --image "$IMAGE" \
+            --version "$VERSION" \
+            --sha "$HEAD_SHA" \
+            --run-id "$RUN_ID" \
+            --out notes.md \
+            --sbom-dir sboms \
+            "${links[@]}"
+          cat notes.md
+
+      - name: Create git tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE: ${{ matrix.image }}
+          VERSION: ${{ matrix.version }}
+          HEAD_SHA: ${{ github.sha }}
+        run: |
+          shopt -s nullglob
+          sboms=(sboms/*)
+          gh release create "$IMAGE/v$VERSION" \
+            --target "$HEAD_SHA" \
+            --title "$IMAGE $VERSION" \
+            --notes-file notes.md \
+            --latest=false \
+            "${sboms[@]}"
+
+  cleanup:
+    needs:
+      - plan
+      - publish
+    if: always() && needs.plan.outputs.has_releases == 'true'
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/cleanup.yml
+    with:
+      dry-run: false
