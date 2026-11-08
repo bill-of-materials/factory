@@ -9,13 +9,17 @@ from pathlib import Path
 from unittest import mock
 
 import ci
-from factory_ci import notes, registry
+from factory_ci import appversion, notes, registry
 from factory_ci.versioning import Commit
 
 INDEX = "sha256:" + "a" * 64
 AMD = "sha256:" + "b" * 64
 ARM = "sha256:" + "c" * 64
 SHA = "1234567890abcdef1234567890abcdef12345678"
+DOCKERFILE = (
+    "FROM x\n# renovate: datasource=git-refs depName=https://github.com/justinfrankel/ninjam branch=main\n"
+    f"ARG NINJAM_REV={SHA}\n"
+)
 
 
 def make_ctx(**overrides):
@@ -72,6 +76,21 @@ class RenderTest(unittest.TestCase):
     def test_first_release_heading(self):
         text = notes.render_release_notes(make_ctx(previous_version=None))
         self.assertIn("Changes (first release)", text)
+
+    def test_application_section(self):
+        apps = [
+            appversion.AppVersion("snapcast", "0.35.0-r1", False, "repology", "alpine_edge/snapcast"),
+            appversion.AppVersion("ninjam", "f" * 40, True, "git-refs",
+                                  "https://github.com/justinfrankel/ninjam", "main"),
+        ]
+        text = notes.render_release_notes(make_ctx(apps=apps))
+        self.assertIn("**Application**\n\n- snapcast `0.35.0-r1`\n"
+                      f"- ninjam [`fffffff`](https://github.com/justinfrankel/ninjam/commit/{'f' * 40})\n",
+                      text)
+        self.assertLess(text.index("**Application**"), text.index("**Architectures**"))
+
+    def test_no_application_section_without_pins(self):
+        self.assertNotIn("**Application**", self.text)
 
     def test_missing_attestation_url_omits_line(self):
         text = notes.render_release_notes(make_ctx(provenance_url=None, sbom_urls={}))
@@ -133,7 +152,8 @@ class CliTest(unittest.TestCase):
                 mock.patch.object(registry, "fetch_attestations",
                                   return_value=[sbom] if attestations is None else attestations), \
                 mock.patch.object(ci.versioning, "latest_tag", return_value="ninjam/v1.4.1"), \
-                mock.patch.object(ci.versioning, "commits_since", return_value=[Commit(SHA, "fix: x", "")]):
+                mock.patch.object(ci.versioning, "commits_since", return_value=[Commit(SHA, "fix: x", "")]), \
+                mock.patch.object(ci.images, "read_dockerfile", return_value=DOCKERFILE) as self.read_dockerfile:
             self.stderr = io.StringIO()
             with redirect_stderr(self.stderr):
                 rc = ci.main(["release-notes", "--image", "ninjam", "--version", "1.4.2", "--sha", SHA,
@@ -148,6 +168,11 @@ class CliTest(unittest.TestCase):
         self.assertEqual(
             json.loads((self.sboms / "ninjam-1.4.2-linux-arm-v7.spdx.json").read_text()),
             {"spdxVersion": "SPDX-2.3"})
+
+    def test_application_read_from_dockerfile_at_release_commit(self):
+        text = self.run_cli()
+        self.read_dockerfile.assert_called_once_with(ci.REPO_ROOT, "ninjam", SHA)
+        self.assertIn("- ninjam [`1234567`](https://github.com/justinfrankel/ninjam/commit/", text)
 
     def test_attestation_url_flags_appear_in_notes(self):
         text = self.run_cli("--provenance-url", "https://github.com/o/r/attestations/1",

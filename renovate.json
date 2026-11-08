@@ -40,6 +40,23 @@
       "matchStrings": [
         "# renovate: datasource=(?<datasource>git-refs) depName=(?<depName>\\S+) branch=(?<currentValue>\\S+)\\s+ARG \\w+_REV=(?<currentDigest>[a-f0-9]{40})"
       ]
+    },
+    {
+      "customType": "regex",
+      "description": "README application versions, kept in step with the Dockerfile ARG pins (same dependency, same PR)",
+      "managerFilePatterns": ["/^README\\.md$/"],
+      "matchStrings": [
+        "<!-- renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+) -->`(?<currentValue>[^`]+)`"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "README application git revisions: full sha in the comment, short sha displayed",
+      "managerFilePatterns": ["/^README\\.md$/"],
+      "matchStrings": [
+        "<!-- renovate: datasource=(?<datasource>git-refs) depName=(?<depName>\\S+) branch=(?<currentValue>\\S+) digest=(?<currentDigest>[a-f0-9]{40}) -->`[a-f0-9]+`"
+      ],
+      "autoReplaceStringTemplate": "<!-- renovate: datasource={{{datasource}}} depName={{{depName}}} branch={{{currentValue}}} digest={{{newDigest}}} -->`{{{newDigestShort}}}`"
     }
   ],
   "packageRules": [
@@ -58,6 +75,12 @@
       "groupName": "GitHub Actions dependencies",
       "matchManagers": ["github-actions"],
       "pinDigests": true
+    },
+    {
+      "description": "Alpine package versions look like 0.35.0-r1",
+      "matchDatasources": ["repology"],
+      "matchPackageNames": ["/^alpine_/"],
+      "versioning": "regex:^(?<major>\\d+)\\.(?<minor>\\d+)\\.(?<patch>\\d+)-r(?<build>\\d+)$"
     },
     {
       "description": "CI tooling (workflow docker run images, build runner labels) goes with the GitHub Actions dependencies, not the image rebuilds",

@@ -4,12 +4,12 @@ BOM OCI-image library and builder
 
 ## Images
 
-| Image | Description | Platforms | Links |
-| --- | --- | --- | --- |
-| `alpine3` | Hardened Alpine 3 base image with a non-root app user, dumb-init, curl and CA certificates. | amd64, arm64, arm/v7 | [Package](https://github.com/orgs/bill-of-materials/packages/container/package/alpine3), [Releases](https://github.com/bill-of-materials/factory/releases?q=alpine3) |
-| `debian13-slim` | Hardened Debian 13 (trixie) slim base image with a non-root app user, dumb-init, curl and CA certificates. | amd64, arm64, arm/v7 | [Package](https://github.com/orgs/bill-of-materials/packages/container/package/debian13-slim), [Releases](https://github.com/bill-of-materials/factory/releases?q=debian13-slim) |
-| `ninjam` | NINJAM server (ninjamsrv) built from source on the alpine3 base image. | amd64 | [Package](https://github.com/orgs/bill-of-materials/packages/container/package/ninjam), [Releases](https://github.com/bill-of-materials/factory/releases?q=ninjam) |
-| `snapcast` | Snapcast server (snapserver) on the alpine3 base image. | amd64, arm64, arm/v7 | [Package](https://github.com/orgs/bill-of-materials/packages/container/package/snapcast), [Releases](https://github.com/bill-of-materials/factory/releases?q=snapcast) |
+| Image | Description | Application | Platforms | Links |
+| --- | --- | --- | --- | --- |
+| `alpine3` | Hardened Alpine 3 base image with a non-root app user, dumb-init, curl and CA certificates. | — | amd64, arm64, arm/v7 | [Package](https://github.com/orgs/bill-of-materials/packages/container/package/alpine3), [Releases](https://github.com/bill-of-materials/factory/releases?q=alpine3) |
+| `debian13-slim` | Hardened Debian 13 (trixie) slim base image with a non-root app user, dumb-init, curl and CA certificates. | — | amd64, arm64, arm/v7 | [Package](https://github.com/orgs/bill-of-materials/packages/container/package/debian13-slim), [Releases](https://github.com/bill-of-materials/factory/releases?q=debian13-slim) |
+| `ninjam` | NINJAM server (ninjamsrv) built from source on the alpine3 base image. | ninjam <!-- renovate: datasource=git-refs depName=https://github.com/justinfrankel/ninjam branch=main digest=f4c0eff3a1d8d5f3ead470d0c7405c3ee37da24e -->`f4c0eff` | amd64 | [Package](https://github.com/orgs/bill-of-materials/packages/container/package/ninjam), [Releases](https://github.com/bill-of-materials/factory/releases?q=ninjam) |
+| `snapcast` | Snapcast server (snapserver) on the alpine3 base image. | snapcast <!-- renovate: datasource=repology depName=alpine_edge/snapcast -->`0.35.0-r1` | amd64, arm64, arm/v7 | [Package](https://github.com/orgs/bill-of-materials/packages/container/package/snapcast), [Releases](https://github.com/bill-of-materials/factory/releases?q=snapcast) |
 
 Pull with `docker pull ghcr.io/bill-of-materials/<image>:<version>`.
 
@@ -63,6 +63,16 @@ To pin something new in a Dockerfile, annotate the `ARG`:
 ARG <NAME>_VERSION=1.2.3-r0
 # renovate: datasource=git-refs depName=https://github.com/<owner>/<repo> branch=main
 ARG <NAME>_REV=<full 40-character commit sha>
+```
+
+An annotated `ARG` is the image's application version: it is shown in the
+package description, the release notes and the **Application** column above.
+When you add one, copy the matching cell into the table (the
+`<!-- renovate: ... -->` comment is what Renovate updates); the unit tests fail
+if the table and the Dockerfiles disagree. To print the expected cell:
+
+```bash
+python3 .github/scripts/ci.py readme-cell --image <image>
 ```
 
 ## Setup notes

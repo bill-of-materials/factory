@@ -18,6 +18,16 @@ def list_images(root: Path) -> list[str]:
     )
 
 
+def read_dockerfile(root: Path, image: str, sha: str | None = None) -> str:
+    """The image's Dockerfile, from the working tree or, with `sha`, from that commit."""
+    if sha is None:
+        return (Path(root) / image / "Dockerfile").read_text()
+    return subprocess.run(
+        ["git", "-C", str(root), "show", f"{sha}:{image}/Dockerfile"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+
+
 def read_platforms(root: Path, image: str) -> list[str]:
     path = Path(root) / image / "platforms.txt"
     if not path.is_file():
