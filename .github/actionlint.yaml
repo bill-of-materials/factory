@@ -1,0 +1,6 @@
+# GitHub-hosted runner labels newer than actionlint's built-in list.
+# Remove an entry once actionlint knows it natively.
+self-hosted-runner:
+  labels:
+    - ubuntu-26.04
+    - ubuntu-26.04-arm
