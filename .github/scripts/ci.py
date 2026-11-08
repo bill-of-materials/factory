@@ -10,7 +10,7 @@ from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from factory_ci import cleanup, description, images, notes, registry, versioning  # noqa: E402
+from factory_ci import appversion, cleanup, description, images, notes, registry, versioning  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -82,7 +82,13 @@ def cmd_release_plan(args) -> int:
 
 
 def cmd_description(args) -> int:
-    print(description.package_description(args.root, args.image))
+    print(description.package_description(args.root, args.image, args.sha))
+    return 0
+
+
+def cmd_readme_cell(args) -> int:
+    dockerfile = images.read_dockerfile(args.root, args.image)
+    print(appversion.readme_cell(appversion.app_versions(args.image, dockerfile)))
     return 0
 
 
@@ -113,6 +119,8 @@ def cmd_release_notes(args) -> int:
         index_digest=index_digest, platforms=platforms, commits=commits, repo=repo,
         server_url=server_url, sha=args.sha, run_id=args.run_id,
         provenance_url=args.provenance_url, sbom_urls=sbom_urls,
+        apps=appversion.app_versions(
+            args.image, images.read_dockerfile(args.root, args.image, args.sha)),
     )
     args.out.write_text(notes.render_release_notes(ctx))
     return 0
@@ -190,7 +198,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("description", help="print the package description for an image")
     p.add_argument("--image", required=True)
+    p.add_argument("--sha", help="read the Dockerfile at this commit; default: working tree")
     p.set_defaults(func=cmd_description)
+
+    p = sub.add_parser("readme-cell", help="print the README Application cell for an image")
+    p.add_argument("--image", required=True)
+    p.set_defaults(func=cmd_readme_cell)
 
     p = sub.add_parser("release-notes", help="render release notes and extract SBOM files")
     p.add_argument("--image", required=True)

@@ -259,7 +259,7 @@ jobs:
         run: |
           ref="$REGISTRY/$IMAGE"
           created=$(git log -1 --format=%cI "$HEAD_SHA")
-          description=$(python3 .github/scripts/ci.py description --image "$IMAGE")
+          description=$(python3 .github/scripts/ci.py description --image "$IMAGE" --sha "$HEAD_SHA")
           sources=()
           while read -r _platform digest _url; do
             sources+=("$ref@$digest")

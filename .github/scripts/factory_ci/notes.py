@@ -2,6 +2,7 @@
 import re
 from dataclasses import dataclass, field
 
+from factory_ci.appversion import AppVersion, source_link
 from factory_ci.registry import REGISTRY
 from factory_ci.versioning import Commit
 
@@ -27,6 +28,7 @@ class ReleaseContext:
     run_id: str
     provenance_url: str | None = None
     sbom_urls: dict[str, str] = field(default_factory=dict)
+    apps: list[AppVersion] = field(default_factory=list)
 
 
 def _commit_line(ctx: ReleaseContext, c: Commit) -> str:
@@ -35,6 +37,12 @@ def _commit_line(ctx: ReleaseContext, c: Commit) -> str:
     for n in _PR.findall(c.subject):
         refs.append(f"[#{n}]({ctx.server_url}/{ctx.repo}/pull/{n})")
     return f"- {c.subject} ({', '.join(refs)})"
+
+
+def _app_line(v: AppVersion) -> str:
+    link = source_link(v)
+    shown = f"[`{v.display}`]({link})" if link else f"`{v.display}`"
+    return f"- {v.name} {shown}"
 
 
 def render_release_notes(ctx: ReleaseContext) -> str:
@@ -49,6 +57,7 @@ def render_release_notes(ctx: ReleaseContext) -> str:
         f"docker pull {ref}:{ctx.version}",
         f"docker pull {pinned}",
         "```", "",
+        *(["**Application**", "", *[_app_line(v) for v in ctx.apps], ""] if ctx.apps else []),
         "**Architectures**", "",
         *[f"- `{platform}`: `{digest}`" for platform, digest in ctx.platforms], "",
         f"**{heading}**", "",

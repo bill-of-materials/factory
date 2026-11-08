@@ -1,7 +1,9 @@
-"""Package description: Dockerfile description label plus a fixed suffix."""
+"""Package description: Dockerfile description label, application versions and a fixed suffix."""
 import re
 import shlex
 from pathlib import Path
+
+from factory_ci import appversion, images
 
 LABEL_KEY = "org.opencontainers.image.description"
 MAX_LENGTH = 512
@@ -25,12 +27,13 @@ def _labels(dockerfile: str) -> dict[str, str]:
     return labels
 
 
-def package_description(root: Path, image: str) -> str:
-    labels = _labels((Path(root) / image / "Dockerfile").read_text())
-    label = labels.get(LABEL_KEY)
+def package_description(root: Path, image: str, sha: str | None = None) -> str:
+    dockerfile = images.read_dockerfile(root, image, sha)
+    label = _labels(dockerfile).get(LABEL_KEY)
     if label is None:
         raise ValueError(f"{image}: missing {LABEL_KEY} label")
-    suffix = SUFFIX_TEMPLATE.format(image=image)
+    apps = appversion.summary(appversion.app_versions(image, dockerfile))
+    suffix = (f" Application: {apps}." if apps else "") + SUFFIX_TEMPLATE.format(image=image)
     if len(label) + len(suffix) > MAX_LENGTH:
         label = label[: MAX_LENGTH - len(suffix) - 1] + "…"
     return label + suffix
