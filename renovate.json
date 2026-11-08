@@ -6,6 +6,42 @@
     ":label(dependencies)",
     ":semanticCommitType(bump)"
   ],
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "Container images run with `docker run` inside workflow steps (e.g. actionlint)",
+      "managerFilePatterns": ["/^\\.github/workflows/[^/]+\\.ya?ml$/"],
+      "matchStrings": [
+        "docker run [^\\n]*?(?<depName>[a-z0-9][a-z0-9./_-]*):(?<currentValue>[^@\\s]+)@(?<currentDigest>sha256:[a-f0-9]{64})"
+      ],
+      "datasourceTemplate": "docker"
+    },
+    {
+      "customType": "regex",
+      "description": "GitHub-hosted runner labels used by the image build matrix",
+      "managerFilePatterns": ["/^\\.github/scripts/factory_ci/images\\.py$/"],
+      "matchStrings": [
+        "\"runner\": \"(?<depName>ubuntu)-(?<currentValue>\\d+\\.\\d+)(?:-arm)?\""
+      ],
+      "datasourceTemplate": "github-runners"
+    },
+    {
+      "customType": "regex",
+      "description": "Dockerfile ARG versions annotated with `# renovate: datasource=... depName=...`",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>\\S+) depName=(?<depName>\\S+)(?: versioning=(?<versioning>\\S+))?\\s+ARG \\w+_VERSION=(?<currentValue>\\S+)"
+      ]
+    },
+    {
+      "customType": "regex",
+      "description": "Dockerfile ARG git revisions annotated with `# renovate: datasource=git-refs depName=<repo> branch=<branch>`",
+      "managerFilePatterns": ["/(^|/)Dockerfile$/"],
+      "matchStrings": [
+        "# renovate: datasource=(?<datasource>git-refs) depName=(?<depName>\\S+) branch=(?<currentValue>\\S+)\\s+ARG \\w+_REV=(?<currentDigest>[a-f0-9]{40})"
+      ]
+    }
+  ],
   "packageRules": [
     {
       "description": "Group all docker image updates",
@@ -22,6 +58,11 @@
       "groupName": "GitHub Actions dependencies",
       "matchManagers": ["github-actions"],
       "pinDigests": true
+    },
+    {
+      "description": "CI tooling (workflow docker run images, build runner labels) goes with the GitHub Actions dependencies, not the image rebuilds",
+      "groupName": "GitHub Actions dependencies",
+      "matchFileNames": [".github/**"]
     }
   ]
 }

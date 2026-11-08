@@ -49,6 +49,22 @@ hours. Cleanup runs after every release and weekly. It can also be started from
 the Actions tab (`cleanup`, dry-run by default). A removed version keeps its
 GitHub Release, with a note saying it was removed from the registry.
 
+## Dependency updates
+
+Renovate keeps every pinned version in this repository up to date: base
+images and actions (by digest), workflow runner labels, the build runners in
+`.github/scripts/factory_ci/images.py`, `docker run` images in workflows, and
+tool versions in workflow `env` (`# renovate:` comment above a `*_VERSION`).
+
+To pin something new in a Dockerfile, annotate the `ARG`:
+
+```dockerfile
+# renovate: datasource=repology depName=alpine_edge/<package>
+ARG <NAME>_VERSION=1.2.3-r0
+# renovate: datasource=git-refs depName=https://github.com/<owner>/<repo> branch=main
+ARG <NAME>_REV=<full 40-character commit sha>
+```
+
 ## Setup notes
 
 - For each package: Package settings, Manage Actions access, add
