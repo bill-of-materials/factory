@@ -1,4 +1,4 @@
-FROM ghcr.io/bill-of-materials/alpine3:latest@sha256:659a4b6c5eb3aa681045975f427e49d999a5fba09d7420eace96e8ab41a78fe6
+FROM ghcr.io/bill-of-materials/alpine3:latest@sha256:f270aba2d86db2b289df0a9d167d4b306bd45f419dd09a8dc7fbec275b6e526c
 
 LABEL org.opencontainers.image.title="ghcr.io/bill-of-materials/ninjam"
 LABEL org.opencontainers.image.description="NINJAM server (ninjamsrv) built from source on the alpine3 base image."
