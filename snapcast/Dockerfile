@@ -7,6 +7,7 @@ LABEL org.opencontainers.image.base.name="ghcr.io/bill-of-materials/alpine3"
 ARG IMAGE_SOURCE
 ARG IMAGE_REVISION
 ARG IMAGE_CREATED
+# renovate: datasource=repology depName=alpine_edge/snapcast
 ARG SNAPCAST_VERSION=0.35.0-r1
 
 LABEL org.opencontainers.image.source="${IMAGE_SOURCE}" \

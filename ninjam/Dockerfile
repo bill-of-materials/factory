@@ -8,7 +8,8 @@ ARG IMAGE_SOURCE
 ARG IMAGE_REVISION
 ARG IMAGE_CREATED
 ARG NINJAM_REPO="https://github.com/justinfrankel/ninjam"
-ARG NINJAM_REV=f4c0eff
+# renovate: datasource=git-refs depName=https://github.com/justinfrankel/ninjam branch=main
+ARG NINJAM_REV=f4c0eff3a1d8d5f3ead470d0c7405c3ee37da24e
 
 LABEL org.opencontainers.image.source="${IMAGE_SOURCE}" \
       org.opencontainers.image.revision="${IMAGE_REVISION}" \
