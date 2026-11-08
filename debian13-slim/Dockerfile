@@ -1,4 +1,4 @@
-FROM docker.io/library/debian:trixie-slim@sha256:a99cfc517144bc59b1978475ec53b46ecabec7e43635402ee5b77cc54cd1b20a
+FROM docker.io/library/debian:trixie-slim@sha256:a72b4433de1cf7d6bae0c4cee74d0547f58601a643b3375f070c51600d63b6b2
 
 LABEL org.opencontainers.image.title="ghcr.io/bill-of-materials/debian13-slim"
 LABEL org.opencontainers.image.description="Hardened Debian 13 (trixie) slim base image with a non-root app user, dumb-init, curl and CA certificates."
