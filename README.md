@@ -83,13 +83,14 @@ python3 .github/scripts/ci.py readme-cell --image <image>
 - Package visibility: Public.
 - Required status check: `validation-required`.
 
-## Supply-chain architecture
+## How it works
 
 ```mermaid
 flowchart TD
     subgraph PR["Pull request (validate)"]
         direction LR
-        PB["Build each platform"] --> PT["Structure tests"]
+        U["CI unit tests + actionlint"]
+        PB["Build each changed image<br/>for each of its platforms"] --> PT["Structure tests"]
     end
     subgraph Main["Push to main (release)"]
         direction TD
@@ -97,7 +98,7 @@ flowchart TD
         T["Test pushed digest"]
         A["SBOM + provenance attestations"]
         I["Multi-arch index"]
-        S["Cosign sign (recursive)"]
+        S["Cosign sign (recursive)<br/>+ index provenance"]
         G["Tags X.Y.Z, X.Y, X, latest"]
         R["GitHub Release"]
         C["Cleanup"]
@@ -105,29 +106,58 @@ flowchart TD
     end
 ```
 
-## Manual build of any image
+Pull requests run `validate`: the CI unit tests and actionlint, then a build
+and structure test for every platform of each image the PR changes. The
+`validation-required` check sums them up. Images are only published by the
+`release` workflow on `main`; nothing is pushed from a pull request or by hand.
 
-```bash
-docker buildx build \
-  --build-arg IMAGE_SOURCE="https://github.com/bill-of-materials/factory" \
-  --build-arg IMAGE_REVISION="$(git rev-parse HEAD)" \
-  --build-arg IMAGE_CREATED="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -t ghcr.io/bill-of-materials/$(basename $(pwd)):$(git rev-parse --short HEAD) \
-  -t ghcr.io/bill-of-materials/$(basename $(pwd)):latest \
-  .
-```
+## Platforms
 
-## Configuring target architectures
-
-By default every image is built and validated for `linux/amd64`, `linux/arm64`
-and `linux/arm/v7`. To override this for a given image, add a `platforms.txt`
-file next to its `Dockerfile` containing a comma-separated list of platforms:
+By default every image is built for `linux/amd64`, `linux/arm64` and
+`linux/arm/v7`. To change that for one image, add a `platforms.txt` next to its
+`Dockerfile`, one platform per line (commas also work):
 
 ```txt
-linux/amd64,linux/arm64
+linux/amd64
+linux/arm64
 ```
 
-On pull requests, the `validate` workflow builds and runs the structure tests
-for every listed platform. On `main`, the `release` workflow builds each
-platform natively (amd64 and arm64 on their own runners, arm/v7 under QEMU),
-tests the pushed digests and publishes one multi-arch index.
+amd64 and arm64 are built and tested on native GitHub runners, any other
+platform under QEMU.
+
+## Adding an image
+
+Create a folder at the repository root containing:
+
+- `Dockerfile`, with an `org.opencontainers.image.description` label (used for
+  the package description; CI fails without it),
+- `structure-test.yaml`, the [container-structure-test](https://github.com/GoogleContainerTools/container-structure-test)
+  checks run on every platform,
+- optionally `platforms.txt` (see above) and annotated application `ARG`s (see
+  [Dependency updates](#dependency-updates)).
+
+Then add its row to the [Images](#images) table (the unit tests check that every
+image has one). Merging to `main` releases it as `1.0.0`. Do the
+[setup](#setup-notes) on its package once it exists.
+
+## Build and test locally
+
+The same commands as the `validate` workflow, from the repository root:
+
+```bash
+image=snapcast platform=linux/arm64
+docker buildx build --platform "$platform" --load -t "local/$image:test" "$image"
+container-structure-test test --platform "$platform" \
+  --image "local/$image:test" --config "$image/structure-test.yaml"
+```
+
+Building for another architecture than your machine's needs QEMU
+(`docker run --privileged --rm tonistiigi/binfmt --install all`). The
+`IMAGE_SOURCE`, `IMAGE_REVISION` and `IMAGE_CREATED` build arguments are set by
+the release workflow and can be left out locally.
+
+The CI scripts' unit tests:
+
+```bash
+(cd .github/scripts && python3 -m unittest discover -s tests -t .)
+```
