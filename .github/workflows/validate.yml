@@ -12,7 +12,7 @@ env:
 
 jobs:
   ci-tests:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -24,7 +24,7 @@ jobs:
         run: docker run --rm -v "$PWD:/repo" -w /repo rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667 -color
 
   discover:
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     outputs:
       matrix: ${{ steps.images.outputs.matrix }}
       has_images: ${{ steps.images.outputs.has_images }}
@@ -104,7 +104,7 @@ jobs:
       - ci-tests
       - discover
       - structure-test
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     if: ${{ always() }}
 
     steps:

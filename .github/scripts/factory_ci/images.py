@@ -5,10 +5,10 @@ from pathlib import Path
 DEFAULT_PLATFORMS = ["linux/amd64", "linux/arm64", "linux/arm/v7"]
 
 _NATIVE_RUNNERS = {
-    "linux/amd64": {"runner": "ubuntu-24.04", "qemu": False, "cst_arch": "amd64"},
-    "linux/arm64": {"runner": "ubuntu-24.04-arm", "qemu": False, "cst_arch": "arm64"},
+    "linux/amd64": {"runner": "ubuntu-26.04", "qemu": False, "cst_arch": "amd64"},
+    "linux/arm64": {"runner": "ubuntu-26.04-arm", "qemu": False, "cst_arch": "arm64"},
 }
-_QEMU_RUNNER = {"runner": "ubuntu-24.04", "qemu": True, "cst_arch": "amd64"}
+_QEMU_RUNNER = {"runner": "ubuntu-26.04", "qemu": True, "cst_arch": "amd64"}
 
 
 def list_images(root: Path) -> list[str]:
